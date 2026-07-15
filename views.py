@@ -238,6 +238,40 @@ async def ranking_embed():
     jackpot=await pool().fetchval("SELECT COALESCE(SUM(balance),0) FROM bank.accounts WHERE account_type='USER' AND currency='CHIP'")
     e.add_field(name="💰 JACKPOT POOL",value=f"**{int(jackpot or 0):,} CHIP**",inline=False);return e
 
+
+class CasinoLobbyView(discord.ui.View):
+    def __init__(self):
+        super().__init__(timeout=None)
+
+    @discord.ui.button(label="💰 CHIP残高",style=discord.ButtonStyle.secondary,custom_id="casino_lobby_balance",row=0)
+    async def balance(self,i,b):
+        await i.response.send_message(f"🎰 現在残高 **{await chip_balance(i.user.id):,} CHIP**",ephemeral=True)
+
+    @discord.ui.button(label="📖 プレイ履歴",style=discord.ButtonStyle.secondary,custom_id="casino_lobby_history",row=0)
+    async def hist(self,i,b):
+        rows=await history(i.user.id,100)
+        e=emb("📖 PLAY HISTORY",color=GOLD)
+        e.description="\n\n".join(
+            f"**{GAME_NAMES.get(r['game_key'],r['game_key'])}｜{r['result']}**\nBET {r['bet']:,} / PAYOUT {r['payout']:,} CHIP\n`{r['round_id']}`"
+            for r in rows[:10]
+        ) or "履歴はありません。"
+        await i.response.send_message(embed=e,ephemeral=True)
+
+    @discord.ui.button(label="🎰 CASINOプロフィール",style=discord.ButtonStyle.secondary,custom_id="casino_lobby_profile",row=1)
+    async def prof(self,i,b):
+        p=await profile(i.user.id)
+        e=emb("🎰 CASINO PROFILE",color=GOLD)
+        for n,val in [
+            ("🎮 総プレイ",f"{p['plays']:,}回"),
+            ("💰 総BET",f"{p['total_bet']:,} CHIP"),
+            ("🏆 総配当",f"{p['total_payout']:,} CHIP"),
+            ("📈 収支",f"{p['total_payout']-p['total_bet']:+,} CHIP"),
+            ("🔥 最大勝利",f"{p['max_win']:,} CHIP"),
+            ("🎲 最多プレイ",GAME_NAMES.get(p["favorite"],p["favorite"])),
+        ]:
+            e.add_field(name=n,value=val)
+        await i.response.send_message(embed=e,ephemeral=True)
+
 class CasinoPanelView(discord.ui.View):
     def __init__(self):super().__init__(timeout=None)
     @discord.ui.button(label="🎮 ゲームを遊ぶ",style=discord.ButtonStyle.primary,custom_id="casino_games",row=0)
