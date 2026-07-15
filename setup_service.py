@@ -35,7 +35,7 @@ async def install_panels(guild):
     await chs["guide"].send(embed=emb("🎰 PAL CASINO GUIDE","PAL CASINOでは **CHIP** を使用します。\n\n🎮 ゲーム一覧からゲームを選択\n💰 BETは整数入力\n🏦 CHIP残高はPAL BANKと共通\n🏆 ランキング・BIG WIN・プレイ履歴に対応"))
     await chs["casino"].send(embed=emb("🎰 PAL CASINO","下のパネルからCASINOを利用できます。",0xF1C40F),view=CasinoPanelView())
     await chs["ranking"].send(embed=await ranking_embed())
-    await chs["status"].send(embed=emb("🟢 PAL CASINO STATUS","**ONLINE**\n\n現在稼働中: 🎰 3リールスロット\nその他ゲーム: 🚧 順次公開",0x2ECC71))
+    await chs["status"].send(embed=emb("🟢 PAL CASINO STATUS","**ONLINE**\n\n現在稼働中: 🎰 スロット / 🎟️ スクラッチ / 🃏 ブラックジャック / 🎡 ルーレット / 💣 マインズ / 🎲 チンチロ / 🎴 丁半 / 🪙 コイントス / 📈 ハイロー / 🚀 クラッシュ\nその他ゲーム: 🚧 順次公開",0x2ECC71))
     await chs["admin"].send(embed=emb("🎰 PAL CASINO ADMIN","管理者用CASINOパネル",0xF1C40F),view=CasinoAdminView())
     return chs
 

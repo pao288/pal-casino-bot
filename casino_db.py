@@ -5,17 +5,17 @@ _pool = None
 
 GAME_DEFS = [
     ("SLOT3","🎰 3リールスロット",True,False),
-    ("SCRATCH","🎟️ スクラッチ",False,False),
-    ("LOTTERY","🎫 宝くじ",False,False),
-    ("LOTO6","🔢 ロト6",False,False),
-    ("BLACKJACK","🃏 ブラックジャック",False,False),
-    ("ROULETTE","🎡 ルーレット",False,False),
-    ("MINES","💣 マインズ",False,False),
-    ("CHINCHIRO","🎲 チンチロ",False,False),
-    ("CHOHAN","🎴 丁半博打",False,False),
-    ("COIN","🪙 コイントス",False,False),
-    ("HIGHLOW","📈 ハイアンドロー",False,False),
-    ("CRASH","🚀 クラッシュ",False,False),
+    ("SCRATCH","🎟️ スクラッチ",True,False),
+    ("LOTTERY","🎫 宝くじ",True,False),
+    ("LOTO6","🔢 ロト6",True,False),
+    ("BLACKJACK","🃏 ブラックジャック",True,False),
+    ("ROULETTE","🎡 ルーレット",True,False),
+    ("MINES","💣 マインズ",True,False),
+    ("CHINCHIRO","🎲 チンチロ",True,False),
+    ("CHOHAN","🎴 丁半博打",True,False),
+    ("COIN","🪙 コイントス",True,False),
+    ("HIGHLOW","📈 ハイアンドロー",True,False),
+    ("CRASH","🚀 クラッシュ",True,False),
     ("SLOT5","🎰 5リールスロット",False,False),
     ("JACKPOT_SLOT","💰 ジャックポットスロット",False,False),
     ("KAZAAN","🪙 カザーン",False,True),
@@ -58,11 +58,47 @@ async def init_db():
         CREATE TABLE IF NOT EXISTS casino.channel_map(
           map_key text PRIMARY KEY, channel_id text NOT NULL
         );
+        CREATE TABLE IF NOT EXISTS casino.game_config(
+          game_key text NOT NULL, config_key text NOT NULL, config_value text NOT NULL,
+          PRIMARY KEY(game_key,config_key)
+        );
+        CREATE TABLE IF NOT EXISTS casino.setting_audit(
+          audit_id bigserial PRIMARY KEY, admin_id text NOT NULL, scope text NOT NULL,
+          target_key text NOT NULL, config_key text NOT NULL, old_value text, new_value text NOT NULL,
+          created_at timestamptz NOT NULL DEFAULT now()
+        );
+        CREATE TABLE IF NOT EXISTS casino.lottery_draws(
+          draw_id bigserial PRIMARY KEY, draw_no bigint UNIQUE NOT NULL,
+          winning_group integer, winning_number integer, status text NOT NULL DEFAULT 'OPEN',
+          draw_at timestamptz NOT NULL, created_at timestamptz NOT NULL DEFAULT now()
+        );
+        CREATE TABLE IF NOT EXISTS casino.lottery_tickets(
+          ticket_id bigserial PRIMARY KEY, draw_id bigint NOT NULL REFERENCES casino.lottery_draws(draw_id),
+          user_id text NOT NULL, ticket_group integer NOT NULL, ticket_number integer NOT NULL,
+          price bigint NOT NULL, prize bigint NOT NULL DEFAULT 0, rank text,
+          purchased_at timestamptz NOT NULL DEFAULT now()
+        );
+        CREATE INDEX IF NOT EXISTS lottery_ticket_user_idx ON casino.lottery_tickets(user_id,purchased_at DESC);
+        CREATE TABLE IF NOT EXISTS casino.loto_draws(
+          draw_id bigserial PRIMARY KEY, draw_no bigint UNIQUE NOT NULL,
+          winning_numbers integer[], bonus_number integer, status text NOT NULL DEFAULT 'OPEN',
+          sales bigint NOT NULL DEFAULT 0, carryover bigint NOT NULL DEFAULT 0,
+          draw_at timestamptz NOT NULL, created_at timestamptz NOT NULL DEFAULT now()
+        );
+        CREATE TABLE IF NOT EXISTS casino.loto_tickets(
+          ticket_id bigserial PRIMARY KEY, draw_id bigint NOT NULL REFERENCES casino.loto_draws(draw_id),
+          user_id text NOT NULL, numbers integer[] NOT NULL, price bigint NOT NULL,
+          prize bigint NOT NULL DEFAULT 0, rank text, purchased_at timestamptz NOT NULL DEFAULT now()
+        );
+        CREATE INDEX IF NOT EXISTS loto_ticket_user_idx ON casino.loto_tickets(user_id,purchased_at DESC);
         """)
         defaults = {
           "big_win_enabled":"1","big_win_multiplier":"30",
           "daily_bonus":"500","casino_maintenance":"0",
-          "alert_high_bet":"10000","alert_plays_10m":"40"
+          "alert_high_bet":"10000","alert_plays_10m":"40",
+          "target_rtp":"95.00","lottery_price":"500","lottery_announce_min":"5000000",
+          "loto_price":"500","loto_p1":"55","loto_p2":"15","loto_p3":"10",
+          "loto_p4":"5","loto_p5":"500","loto_carry":"15"
         }
         for k,v in defaults.items():
             await c.execute("INSERT INTO casino.settings VALUES($1,$2) ON CONFLICT DO NOTHING",k,v)
@@ -133,3 +169,36 @@ async def ranking_maxwin():
 async def ranking_chip():
     return await pool().fetch("""SELECT owner_id user_id,balance value FROM bank.accounts
       WHERE account_type='USER' AND currency='CHIP' ORDER BY balance DESC LIMIT 10""")
+
+
+async def config_get(game_key,key,default=None):
+    v=await pool().fetchval("SELECT config_value FROM casino.game_config WHERE game_key=$1 AND config_key=$2",game_key,key)
+    return default if v is None else v
+
+async def config_set(game_key,key,value,admin_id="SYSTEM"):
+    old=await config_get(game_key,key)
+    await pool().execute("""INSERT INTO casino.game_config(game_key,config_key,config_value) VALUES($1,$2,$3)
+      ON CONFLICT(game_key,config_key) DO UPDATE SET config_value=EXCLUDED.config_value""",game_key,key,str(value))
+    await pool().execute("""INSERT INTO casino.setting_audit(admin_id,scope,target_key,config_key,old_value,new_value)
+      VALUES($1,'GAME',$2,$3,$4,$5)""",str(admin_id),game_key,key,old,str(value))
+    return old
+
+async def audit_global(admin_id,key,old,new):
+    await pool().execute("""INSERT INTO casino.setting_audit(admin_id,scope,target_key,config_key,old_value,new_value)
+      VALUES($1,'CASINO','GLOBAL',$2,$3,$4)""",str(admin_id),key,old,str(new))
+
+async def game_stats(game_key):
+    return await pool().fetchrow("""SELECT COUNT(*) plays,
+      COUNT(*) FILTER(WHERE created_at>=now()-interval '24 hours') plays24,
+      COALESCE(SUM(bet),0) bets,COALESCE(SUM(payout),0) payouts,
+      COALESCE(AVG(bet),0) avg_bet,COALESCE(MAX(bet),0) max_bet,
+      COALESCE(MAX(payout),0) max_payout,
+      COALESCE(100.0*COUNT(*) FILTER(WHERE result='WIN')/NULLIF(COUNT(*),0),0) win_rate,
+      COUNT(*) FILTER(WHERE multiplier >= COALESCE((SELECT setting_value::numeric FROM casino.settings WHERE setting_key='big_win_multiplier'),30)) big_wins
+      FROM casino.rounds WHERE game_key=$1""",game_key)
+
+async def current_lottery_draw():
+    return await pool().fetchrow("SELECT * FROM casino.lottery_draws WHERE status='OPEN' ORDER BY draw_no DESC LIMIT 1")
+
+async def current_loto_draw():
+    return await pool().fetchrow("SELECT * FROM casino.loto_draws WHERE status='OPEN' ORDER BY draw_no DESC LIMIT 1")
