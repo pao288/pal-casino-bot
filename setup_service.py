@@ -46,7 +46,10 @@ async def _get_or_create_text(guild,category,name,map_key,locked=False):
                 guild.default_role:discord.PermissionOverwrite(view_channel=True,send_messages=False),
                 guild.me:discord.PermissionOverwrite(view_channel=True,send_messages=True,manage_messages=True),
             }
-        ch=await guild.create_text_channel(name,category=category,overwrites=overwrites)
+        if overwrites is None:
+            ch=await guild.create_text_channel(name,category=category)
+        else:
+            ch=await guild.create_text_channel(name,category=category,overwrites=overwrites)
     await _upsert_map(map_key,ch)
     return ch
 
