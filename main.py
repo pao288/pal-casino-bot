@@ -34,7 +34,6 @@ class SetupView(discord.ui.View):
 async def setup_hook():
     await init_db()
     await init_bank_gateway()
-    bot.add_view(CasinoPanelView())
     bot.add_view(CasinoAdminView())
     bot.add_view(CasinoLobbyView())
     for _key in ["SLOT3","SCRATCH","BLACKJACK","ROULETTE","MINES","CHINCHIRO","CHOHAN","COIN","HIGHLOW","CRASH"]:

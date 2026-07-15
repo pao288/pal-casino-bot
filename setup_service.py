@@ -94,7 +94,7 @@ async def install_direct_game_panels(guild,category=None):
         await _clear_bot_messages(ch,guild)
         title,desc=DIRECT_GAME_INFO[key]
         await ch.send(
-            embed=emb(title,desc+"\n\nボタンを押す → BET入力 → 結果はこの場で本人だけに表示。\n同じ結果は 📺｜casino-live に自動公開。",GOLD),
+            embed=emb(title,desc+"\n\n専用UIから直接プレイ。操作は本人のみ表示。\n結果・特殊演出は 📺｜casino-live に公開。",GOLD),
             view=DirectGamePanel(key)
         )
 
