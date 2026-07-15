@@ -3,7 +3,7 @@ from discord.ext import commands
 from casino_db import init_db
 from bank_gateway_for_other_bots import init_bank_gateway
 from views import CasinoPanelView,CasinoAdminView
-from setup_service import install_panels,ensure_structure,delete_structure
+from setup_service import install_panels,ensure_structure,delete_structure, install_direct_game_panels
 
 logging.basicConfig(level=logging.INFO)
 log=logging.getLogger("pal_casino")
@@ -36,6 +36,11 @@ async def setup_hook():
     await init_bank_gateway()
     bot.add_view(CasinoPanelView())
     bot.add_view(CasinoAdminView())
+    for _key in ["SLOT3","SCRATCH","BLACKJACK","ROULETTE","MINES","CHINCHIRO","CHOHAN","COIN","HIGHLOW","CRASH"]:
+        bot.add_view(DirectGamePanel(_key))
+    bot.add_view(DailyPanel())
+    bot.add_view(LotteryLaunchView())
+    bot.add_view(LotoLaunchView())
     bot.add_view(SetupView())
     log.info("DB・BANK Gateway接続完了")
 

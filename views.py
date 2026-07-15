@@ -32,6 +32,21 @@ async def result_message(i,r,key):
     e.add_field(name="現在残高",value=f"{r['balance']:,} CHIP")
     e.set_footer(text=f"Round ID: {r['round_id']}")
     await i.edit_original_response(content=None,embed=e)
+
+    # 本人は操作チャンネル上のephemeral結果を見る。
+    # 同じ結果をcasino-liveへ公開する。
+    live_id=await pool().fetchval("SELECT channel_id FROM casino.channel_map WHERE map_key='casino_live'")
+    live=i.guild.get_channel(int(live_id)) if live_id else None
+    if live:
+        public_e=emb(f"{GAME_NAMES[key]}｜LIVE RESULT",color=GOLD)
+        public_e.description=f"{i.user.mention}\n\n" + ("\n".join(detail) if detail else "")
+        public_e.add_field(name="BET",value=f"{r['bet']:,} CHIP")
+        public_e.add_field(name="PAYOUT",value=f"{r['payout']:,} CHIP")
+        public_e.add_field(name="収支",value=f"{r['profit']:+,} CHIP")
+        public_e.add_field(name="倍率",value=f"×{r['multiplier']}")
+        public_e.set_footer(text=f"Round ID: {r['round_id']}")
+        await live.send(embed=public_e)
+
     threshold=int(await setting("big_win_multiplier","30"))
     if r["multiplier"]>=threshold and await setting("big_win_enabled","1")=="1":
         cid=await pool().fetchval("SELECT channel_id FROM casino.channel_map WHERE map_key='big_win'")
@@ -117,6 +132,82 @@ class LaunchView(discord.ui.View):
     async def play(self,i,b):await i.response.send_modal(GameModal(self.key))
 
 def game_select_embed(): return emb("🎮 GAME SELECT","ゲームを選択してください。",GOLD)
+
+
+DIRECT_GAME_INFO={
+"SLOT3":("🎰 3リールスロット","BETを入力して3リールを回します。"),
+"SCRATCH":("🎟️ スクラッチ","BETを入力してスクラッチを削ります。"),
+"BLACKJACK":("🃏 ブラックジャック","BETと HIT / STAND を入力します。"),
+"ROULETTE":("🎡 ルーレット","BETと 赤 / 黒 / 0～36 を入力します。"),
+"MINES":("💣 マインズ","BETと 地雷数,開ける数 を入力します。例: 3,4"),
+"CHINCHIRO":("🎲 チンチロ","BETを入力してサイコロを振ります。"),
+"CHOHAN":("🎴 丁半博打","BETと 丁 / 半 を入力します。"),
+"COIN":("🪙 コイントス","BETと 表 / 裏 を入力します。"),
+"HIGHLOW":("📈 ハイアンドロー","BETと HIGH / LOW を入力します。"),
+"CRASH":("🚀 クラッシュ","BETと利確倍率を入力します。例: 2.0"),
+}
+
+class DirectGamePanel(discord.ui.View):
+    def __init__(self,key):
+        super().__init__(timeout=None)
+        self.key=key
+        button=discord.ui.Button(
+            label="🎮 プレイ",
+            style=discord.ButtonStyle.success,
+            custom_id=f"casino_direct_{key.lower()}",
+        )
+        button.callback=self.play
+        self.add_item(button)
+    async def play(self,i):
+        await i.response.send_modal(GameModal(self.key))
+
+class DailyPanel(discord.ui.View):
+    def __init__(self):
+        super().__init__(timeout=None)
+        b=discord.ui.Button(label="🎁 500 CHIPで回す",style=discord.ButtonStyle.success,custom_id="casino_direct_daily")
+        b.callback=self.play
+        self.add_item(b)
+    async def play(self,i):
+        await i.response.defer(ephemeral=True,thinking=True)
+        try:
+            import random
+            from bank_gateway_for_other_bots import bank_credit,bank_debit
+            uid=str(i.user.id);day=await pool().fetchval("SELECT (now() AT TIME ZONE 'Asia/Tokyo')::date::text")
+            if await pool().fetchval("SELECT 1 FROM casino.daily_claims WHERE user_id=$1 AND claim_date=(now() AT TIME ZONE 'Asia/Tokyo')::date",uid):
+                await i.edit_original_response(content="🎁 今日のガチャはプレイ済みです。次は0:00に更新！");return
+            d=await bank_debit("PAL_CASINO",f"DAILY_GACHA:{uid}:{day}:BET",uid,"CHIP",500)
+            if d["status"]!="SUCCESS":
+                await i.edit_original_response(content="💰 ガチャには **500 CHIP** 必要です。");return
+            reward=random.choices([550,1000,1500,3000,-10000,100000],weights=[81,10,5,3,0.999,0.001],k=1)[0]
+            if reward<0:
+                loss=abs(reward)
+                c=await bank_debit("PAL_CASINO",f"DAILY_GACHA:{uid}:{day}:PENALTY",uid,"CHIP",loss)
+                if c["status"]=="INSUFFICIENT_BALANCE":
+                    current=await chip_balance(uid)
+                    if current>0: await bank_debit("PAL_CASINO",f"DAILY_GACHA:{uid}:{day}:PENALTY_ALL",uid,"CHIP",current)
+                    actual_loss=current
+                elif c["status"]=="SUCCESS": actual_loss=loss
+                else:
+                    await bank_credit("PAL_CASINO",f"DAILY_GACHA:{uid}:{day}:REFUND",uid,"CHIP",500)
+                    await i.edit_original_response(content=f"ガチャ処理: `{c['status']}` / 500 CHIP返金済み");return
+                await pool().execute("INSERT INTO casino.daily_claims VALUES($1,(now() AT TIME ZONE 'Asia/Tokyo')::date,$2)",uid,-actual_loss)
+                text=f"💀 **-{actual_loss:,} CHIP**！｜参加費込み収支 **{-actual_loss-500:+,} CHIP**"
+            else:
+                c=await bank_credit("PAL_CASINO",f"DAILY_GACHA:{uid}:{day}:WIN",uid,"CHIP",reward)
+                if c["status"]!="SUCCESS":
+                    await bank_credit("PAL_CASINO",f"DAILY_GACHA:{uid}:{day}:REFUND",uid,"CHIP",500)
+                    await i.edit_original_response(content="ガチャ配当処理失敗 / 500 CHIP返金済み");return
+                await pool().execute("INSERT INTO casino.daily_claims VALUES($1,(now() AT TIME ZONE 'Asia/Tokyo')::date,$2)",uid,reward)
+                text=f"🎁 **{reward:,} CHIP** 獲得！｜収支 **{reward-500:+,} CHIP**"
+            await i.edit_original_response(content=text)
+            if reward in (-10000,100000):
+                cid=await pool().fetchval("SELECT channel_id FROM casino.channel_map WHERE map_key='big_win'")
+                ch=i.guild.get_channel(int(cid)) if cid else None
+                if ch:
+                    await ch.send(embed=emb("🎁🔥 DAILY GACHA RARE RESULT 🔥🎁",f"{i.user.mention}\\n\\n**{reward:+,} CHIP**\\n確率 **{'0.001%' if reward==100000 else '0.999%'}**",GOLD))
+        except Exception as ex:
+            await i.edit_original_response(content=f"ガチャエラー: `{type(ex).__name__}`\\n`{str(ex)[:800]}`")
+
 
 class GameSelect(discord.ui.Select):
     def __init__(self):
