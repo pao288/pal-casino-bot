@@ -86,15 +86,47 @@ async def play_slot(user_id,bet):
     mult=float(payouts.get("777",50)) if reels==["7️⃣"]*3 else float(payouts.get("DIAMOND",20)) if reels==["💎"]*3 else float(payouts.get("CHERRY",5)) if reels==["🍒"]*3 else float(payouts.get("SAME",3)) if len(set(reels))==1 else 0
     return await _settle(user_id,"SLOT3",bet,int(bet*mult),"WIN" if mult else "LOSE",mult,{"reels":reels})
 
-async def play_scratch(user_id):
+async def start_scratch(user_id):
     bet=500
     bad=await _limits(user_id,"SCRATCH",bet)
     if bad:return bad
+    r=await reserve_bet(user_id,"SCRATCH",bet)
+    if r["status"]!="SUCCESS":return r
     four_rate=float(await config_get("SCRATCH","four_tile_rate","3.0"))
-    tiles=4 if random.random()*100<four_rate else 3
-    weights,payouts=await _tables("SCRATCH",[94,5,0.9,0.1],[0,2,10,100])
-    mult=float(random.choices(payouts,weights=weights,k=1)[0])
-    return await _settle(user_id,"SCRATCH",bet,int(bet*mult),"WIN" if mult else "LOSE",mult,{"tiles":tiles,"special":tiles==4})
+    max_scratches=4 if random.random()*100<four_rate else 3
+
+    # 絵文字3個一致で等級確定。高配当絵柄ほど盤面への出現が少ない。
+    symbols=["👑","💎","⭐","🍒","🍋","🔔","🍇","🍉","🥝"]
+    weights=[0.2,0.8,2.5,8,18,18,18,18,16.5]
+    board=random.choices(symbols,weights=weights,k=9)
+
+    # 一定確率で3一致候補を盤面へ仕込む。どこを削るかはユーザー選択。
+    inject_symbol=random.choices(["👑","💎","⭐","🍒",None],weights=[0.1,0.9,5,18,76],k=1)[0]
+    if inject_symbol:
+        for pos in random.sample(range(9),3):board[pos]=inject_symbol
+
+    return {**r,"board":board,"opened":set(),"max_scratches":max_scratches}
+
+async def finish_scratch(user_id,state):
+    opened_symbols=[state["board"][n] for n in state["opened"]]
+    table={"👑":("特賞",100),"💎":("1等",10),"⭐":("2等",2),"🍒":("3等",1)}
+    grade="はずれ";symbol="—";mult=0
+    for sym,(name,pay) in table.items():
+        if opened_symbols.count(sym)>=3:
+            grade=name;symbol=sym;mult=pay;break
+    payout=int(state["bet"]*mult)
+    state["grade"]=grade;state["symbol"]=symbol;state["prize_multiplier"]=mult
+    return await finalize_reserved(user_id,"SCRATCH",state["bet"],payout,
+        grade if mult else "LOSE",mult,
+        {"grade":grade,"symbol":symbol,"scratched":len(state["opened"])},
+        state["round_id"])
+
+async def play_scratch(user_id):
+    # 旧呼び出し互換
+    state=await start_scratch(user_id)
+    if state["status"]!="SUCCESS":return state
+    state["opened"]=set(range(state["max_scratches"]))
+    return await finish_scratch(user_id,state)
 
 def roulette_win(choice,n):
     color="緑" if n==0 else ("赤" if n in RED else "黒")
@@ -154,7 +186,7 @@ async def start_chohan(user_id,bet):
         return {**r,"special":"サイコロなし","dice":[],"rolled":None,
                 "npc":"……おい。サイコロが、ないぞ。"}
     dice=[random.randint(1,6),random.randint(1,6)]
-    rolled="丁" if sum(dice)%2 else "半"
+    rolled="丁" if sum(dice)%2==0 else "半"
     # Result hint only; choice happens after this line is shown.
     if rolled=="丁":
         hints=["奇の気配がするな……","片方だけ妙に跳ねたな。","さて、この出目をどう読む？"]
@@ -170,7 +202,7 @@ async def finish_chohan(user_id,state,choice):
             {"special":"サイコロなし","special_loss":loss},rid)
     mult=2 if choice==state["rolled"] else 0
     return await finalize_reserved(user_id,"CHOHAN",bet,bet*mult,"WIN" if mult else "LOSE",mult,
-        {"dice":state["dice"],"choice":choice,"rolled":state["rolled"],"npc":state["npc"]},rid)
+        {"choice":choice,"rolled":state["rolled"],"npc":state["npc"]},rid)
 
 async def play_coin(user_id,bet,choice):
     bad=await _limits(user_id,"COIN",bet)
