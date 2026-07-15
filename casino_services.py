@@ -9,8 +9,12 @@ RED={1,3,5,7,9,12,14,16,18,19,21,23,25,27,30,32,34,36}
 def round_id(game_key):
     return f"CASINO-{game_key}-{secrets.token_hex(5).upper()}"
 
-async def _target_scale():
-    return float(await setting("target_rtp","95.00"))/95.0
+async def _target_scale(key=None):
+    global_rate=float(await setting("target_rtp","95.00"))
+    if key:
+        game_rate=float(await config_get(key,"payout_rate",str(global_rate)))
+        return game_rate/95.0
+    return global_rate/95.0
 
 async def _tables(key,default_weights=None,default_payouts=None):
     w=await config_get(key,"probability_table","")
@@ -41,6 +45,14 @@ async def reserve_bet(uid,key,bet,rid=None):
     return {"status":"SUCCESS","round_id":rid,"bet":bet}
 
 async def finalize_reserved(uid,key,bet,payout,result,mult,detail,rid):
+    # V9: game payout_rate is applied at the single settlement point.
+    # This keeps every normal game connected to the same admin RTP control.
+    raw_payout=int(payout)
+    if raw_payout>0 and result not in ("PUSH",):
+        scale=await _target_scale(key)
+        payout=max(0,int(raw_payout*scale))
+        mult=round(payout/bet,4) if bet else mult
+        detail={**detail,"rtp_rate":float(await config_get(key,"payout_rate",await setting("target_rtp","95.00")))}
     if payout>0:
         c=await bank_credit("PAL_CASINO",f"{rid}:WIN",uid,"CHIP",int(payout))
         if c["status"] not in ("SUCCESS","ALREADY_PROCESSED"):
@@ -72,7 +84,6 @@ async def play_slot(user_id,bet):
     if isinstance(weights,dict):weights=[float(weights.get(x,WEIGHTS[n])) for n,x in enumerate(SYMBOLS)]
     reels=random.choices(SYMBOLS,weights=weights,k=3)
     mult=float(payouts.get("777",50)) if reels==["7️⃣"]*3 else float(payouts.get("DIAMOND",20)) if reels==["💎"]*3 else float(payouts.get("CHERRY",5)) if reels==["🍒"]*3 else float(payouts.get("SAME",3)) if len(set(reels))==1 else 0
-    mult=round(mult*await _target_scale(),4) if mult else 0
     return await _settle(user_id,"SLOT3",bet,int(bet*mult),"WIN" if mult else "LOSE",mult,{"reels":reels})
 
 async def play_scratch(user_id):
@@ -110,7 +121,8 @@ async def play_roulette(user_id,bet,choice):
 async def play_chinchiro(user_id,bet):
     bad=await _limits(user_id,"CHINCHIRO",bet)
     if bad:return bad
-    god_rate=float(await config_get("CHINCHIRO","god_rate",str(1/8192)))
+    god_pct=await config_get("CHINCHIRO","god_rate_percent",None)
+    god_rate=(float(god_pct)/100.0) if god_pct is not None else float(await config_get("CHINCHIRO","god_rate",str(1/8192)))
     shonben_rate=float(await config_get("CHINCHIRO","shonben_rate","0.0001"))
     x=random.random()
     if x<god_rate:
@@ -134,20 +146,31 @@ async def play_chinchiro(user_id,bet):
     else:mult=0;result="LOSE"
     return await _settle(user_id,"CHINCHIRO",bet,bet*mult,result,mult,{"player":player,"npc":npc,"player_role":ps[2],"npc_role":ns[2]})
 
-async def play_chohan(user_id,bet,choice):
-    bad=await _limits(user_id,"CHOHAN",bet)
-    if bad:return bad
-    no_dice_rate=float(await config_get("CHOHAN","no_dice_rate","0.000001"))
+async def start_chohan(user_id,bet):
+    r=await reserve_bet(user_id,"CHOHAN",bet)
+    if r["status"]!="SUCCESS":return r
+    no_dice_rate=float(await config_get("CHOHAN","special_rate","0.0001"))/100.0
     if random.random()<no_dice_rate:
-        rid=round_id("CHOHAN")
-        r=await reserve_bet(user_id,"CHOHAN",bet,rid)
-        if r["status"]!="SUCCESS":return r
-        loss=await special_debit(user_id,rid,"NO_DICE",1_000_000)
-        return await finalize_reserved(user_id,"CHOHAN",bet,0,"NO_DICE",0,{"special":"サイコロなし","special_loss":loss},rid)
+        return {**r,"special":"サイコロなし","dice":[],"rolled":None,
+                "npc":"……おい。サイコロが、ないぞ。"}
     dice=[random.randint(1,6),random.randint(1,6)]
-    rolled="丁" if sum(dice)%2 else "半";mult=2 if choice==rolled else 0
-    hints=["さぁ張った張った！","今日は妙に静かだな…","出目は風だけが知っている。","勝負は一瞬だ。"]
-    return await _settle(user_id,"CHOHAN",bet,bet*mult,"WIN" if mult else "LOSE",mult,{"dice":dice,"choice":choice,"rolled":rolled,"npc":random.choice(hints)})
+    rolled="丁" if sum(dice)%2 else "半"
+    # Result hint only; choice happens after this line is shown.
+    if rolled=="丁":
+        hints=["奇の気配がするな……","片方だけ妙に跳ねたな。","さて、この出目をどう読む？"]
+    else:
+        hints=["揃った空気を感じるな……","二つの目が妙に落ち着いてる。","静かな出目だ。どう張る？"]
+    return {**r,"dice":dice,"rolled":rolled,"npc":random.choice(hints),"special":None}
+
+async def finish_chohan(user_id,state,choice):
+    rid=state["round_id"];bet=state["bet"]
+    if state.get("special")=="サイコロなし":
+        loss=await special_debit(user_id,rid,"NO_DICE",1_000_000)
+        return await finalize_reserved(user_id,"CHOHAN",bet,0,"NO_DICE",0,
+            {"special":"サイコロなし","special_loss":loss},rid)
+    mult=2 if choice==state["rolled"] else 0
+    return await finalize_reserved(user_id,"CHOHAN",bet,bet*mult,"WIN" if mult else "LOSE",mult,
+        {"dice":state["dice"],"choice":choice,"rolled":state["rolled"],"npc":state["npc"]},rid)
 
 async def play_coin(user_id,bet,choice):
     bad=await _limits(user_id,"COIN",bet)
@@ -209,7 +232,7 @@ async def create_crash(user_id,bet,auto=None):
     event_roll=random.random()
     bigbang_rate=float(await config_get("CRASH","bigbang_rate","0.0000000000000000000000000001"))
     blackhole_rate=float(await config_get("CRASH","blackhole_rate","0.00001"))
-    moon_rate=float(await config_get("CRASH","moon_rate","0.001"))
+    moon_rate=float(await config_get("CRASH","moon_rate_percent","0.1"))/100.0
     if event_roll<bigbang_rate:event="BIG_BANG";target=1.01
     elif event_roll<bigbang_rate+blackhole_rate:event="BLACK_HOLE";target=round(random.uniform(1.05,5),2)
     elif event_roll<bigbang_rate+blackhole_rate+moon_rate:event="MOON";target=100.0

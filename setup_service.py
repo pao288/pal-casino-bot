@@ -94,7 +94,7 @@ async def install_direct_game_panels(guild,category=None):
         await _clear_bot_messages(ch,guild)
         title,desc=DIRECT_GAME_INFO[key]
         await ch.send(
-            embed=emb(title,desc+"\n\n専用UIから直接プレイ。操作は本人のみ表示。\n結果・特殊演出は 📺｜casino-live に公開。",GOLD),
+            embed=emb(title,desc+"\n\n**遊び方**\n下の「🎮 プレイ」から開始。BETや選択は本人だけに表示されます。\n結果は 📺｜casino-live にも公開されます。",GOLD),
             view=DirectGamePanel(key)
         )
 
@@ -108,14 +108,14 @@ async def install_direct_game_panels(guild,category=None):
     lottery=chs["lottery"]
     await _clear_bot_messages(lottery,guild)
     await lottery.send(
-        embed=emb("🎫 PAL 宝くじ","1枚 **500 CHIP**\n**01～100組 / 100000～199999番**\n1等 **1,000,000,000 CHIP**",GOLD),
+        embed=emb("🎫 PAL 宝くじ","1枚 **500 CHIP**\n\n**どんなゲーム？**\n購入すると「組」と「6桁番号」が発行され、抽選番号との一致で等級が決まります。\n**01～100組 / 100000～199999番**\n1等 **1,000,000,000 CHIP**\n購入後は **📖 マイ宝くじ** から券・当選結果・次回抽選を確認できます。",GOLD),
         view=LotteryLaunchView()
     )
 
     loto=chs["loto6"]
     await _clear_bot_messages(loto,guild)
     await loto.send(
-        embed=emb("🔢 ロト6","1口 **500 CHIP**\n1～43から6個\n数字選択 / クイックピック",GOLD),
+        embed=emb("🔢 ロト6","1口 **500 CHIP**\n\n**どんなゲーム？**\n1～43から異なる6数字を選び、抽選された本数字との一致数で当選が決まります。\n数字選択 / クイックピック\n購入後は **📖 マイロト6** から数字・当選結果・次回抽選・キャリーを確認できます。",GOLD),
         view=LotoLaunchView()
     )
     return chs

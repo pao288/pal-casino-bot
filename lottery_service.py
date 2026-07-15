@@ -105,3 +105,18 @@ async def draw_loto():
             winners.append((t["user_id"],rank,prize,t["numbers"]))
     await pool().execute("""UPDATE casino.loto_draws SET status='DRAWN',winning_numbers=$1,bonus_number=$2,carryover=$3 WHERE draw_id=$4""",winning,bonus,next_carry,draw["draw_id"])
     return {"draw_no":draw["draw_no"],"winning":winning,"bonus":bonus,"carryover":next_carry,"winners":winners}
+
+
+async def lottery_user_overview(uid, limit=20):
+    draw=await ensure_lottery_draw()
+    tickets=await pool().fetch("""SELECT t.*,d.draw_no,d.status draw_status,d.winning_group,d.winning_number,d.draw_at
+      FROM casino.lottery_tickets t JOIN casino.lottery_draws d ON d.draw_id=t.draw_id
+      WHERE t.user_id=$1 ORDER BY t.purchased_at DESC LIMIT $2""",str(uid),limit)
+    return {"draw":draw,"tickets":tickets}
+
+async def loto_user_overview(uid, limit=20):
+    draw=await ensure_loto_draw()
+    tickets=await pool().fetch("""SELECT t.*,d.draw_no,d.status draw_status,d.winning_numbers,d.bonus_number,d.draw_at
+      FROM casino.loto_tickets t JOIN casino.loto_draws d ON d.draw_id=t.draw_id
+      WHERE t.user_id=$1 ORDER BY t.purchased_at DESC LIMIT $2""",str(uid),limit)
+    return {"draw":draw,"tickets":tickets}
