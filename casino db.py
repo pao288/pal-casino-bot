@@ -123,23 +123,12 @@ def pool():
     return _pool
 
 
-# ===== !casinosetup（PAL CASINOカテゴリ一式）用: ゲームキー→専用チャンネルmap_key 対応表 =====
+# ===== !casinosetup（PAL CASINOカテゴリ一式）用: ゲームキー→専用チャンネルmap_key 変換 =====
+# 固定の対応表ではなく命名規則（v2_room_<game_key小文字>）から導出する。
+# casino.games にゲームを追加するだけで自動的に対応するチャンネルへ結果がルーティングされる。
 # views.py と setup_service.py の双方から参照するため、依存関係のない casino_db.py に配置している。
-V2_GAME_ROOM_MAP = {
-    "SLOT3": "v2_room_slot3",
-    "SCRATCH": "v2_room_scratch",
-    "BLACKJACK": "v2_room_blackjack",
-    "ROULETTE": "v2_room_roulette",
-    "MINES": "v2_room_mines",
-    "CHINCHIRO": "v2_room_chinchiro",
-    "CHOHAN": "v2_room_chohan",
-    "COIN": "v2_room_coin",
-    "HIGHLOW": "v2_room_highlow",
-    "CRASH": "v2_room_crash",
-    "LOTTERY": "v2_room_lottery",
-    "LOTO6": "v2_room_loto6",
-    "GACHA": "v2_room_gacha",
-}
+def v2_room_map_key(game_key: str) -> str:
+    return f"v2_room_{str(game_key).lower()}"
 
 async def setting(key, default=None):
     return await pool().fetchval("SELECT setting_value FROM casino.settings WHERE setting_key=$1",key) or default

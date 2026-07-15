@@ -1,5 +1,5 @@
 import discord, asyncio
-from casino_db import games,game,profile,history,ranking_chip,ranking_maxwin,total_stats,setting,set_setting,chip_balance,pool,config_get,config_set,audit_global,game_stats,V2_GAME_ROOM_MAP
+from casino_db import games,game,profile,history,ranking_chip,ranking_maxwin,total_stats,setting,set_setting,chip_balance,pool,config_get,config_set,audit_global,game_stats,v2_room_map_key
 from casino_services import play_slot,play_coin,play_roulette,play_scratch,start_scratch,finish_scratch,play_chinchiro,start_chohan,finish_chohan,start_highlow,highlow_step,finish_highlow,create_crash,finish_crash,start_mines,mines_open,finish_mines,start_blackjack,blackjack_hit,finish_blackjack
 from lottery_service import buy_lottery,buy_loto,quick_pick,draw_lottery,draw_loto,lottery_user_overview,loto_user_overview,ensure_lottery_draw,ensure_loto_draw,latest_lottery_result,latest_loto_result,JST
 
@@ -31,7 +31,7 @@ async def _channel_by_map_keys(guild, *map_keys):
     return None
 
 async def _live_channel(guild, key):
-    return await _channel_by_map_keys(guild, V2_GAME_ROOM_MAP.get(key), "casino_live")
+    return await _channel_by_map_keys(guild, v2_room_map_key(key), "casino_live")
 
 async def _announce_channel(guild):
     return await _channel_by_map_keys(guild, "v2_announce", "big_win")
@@ -1063,7 +1063,8 @@ class CasinoAdminView(discord.ui.View):
         await _ss.install_v2_panels(i.guild,channels)
         await i.followup.send(
             f"♻️ PAL CASINOシステムを復旧しました。\n"
-            f"新規作成: {counts['created']}件\n復旧: {counts['restored']}件\n再利用: {counts['reused']}件\n\n"
+            f"新規作成: {counts['created']}件\n復旧: {counts['restored']}件\n再利用: {counts['reused']}件\n"
+            f"ゲームチャンネル数: {counts['game_channels']}\n\n"
             f"（CHIP・ゲームデータ・ランキング・宝くじ・ロト6・確率・各ゲーム設定・全ユーザーデータはそのまま利用しています）",
             ephemeral=True,
         )

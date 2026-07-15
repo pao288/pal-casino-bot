@@ -1,5 +1,5 @@
 import discord
-from casino_db import map_get, map_set, map_clear, pool, games, V2_GAME_ROOM_MAP, setting
+from casino_db import map_get, map_set, map_clear, pool, games, v2_room_map_key, setting
 from views import (
     CasinoAdminView, CasinoLobbyView, DirectGamePanel, DailyPanel,
     LotteryLaunchView, LotoLaunchView, DIRECT_GAME_INFO,
@@ -233,22 +233,30 @@ V2_MAIN_CHANNELS=[
     ("v2_admin","🛠｜運営","PAL CASINO｜管理者専用コンソール"),
 ]
 
-# (map_key, チャンネル名, ゲームキー) ※ GACHAはcasino.gamesテーブルに存在しない特別枠
-V2_GAME_ROOMS=[
-    ("v2_room_slot3","🎰｜スロット","SLOT3"),
-    ("v2_room_scratch","🎟️｜スクラッチ","SCRATCH"),
-    ("v2_room_blackjack","🃏｜ブラックジャック","BLACKJACK"),
-    ("v2_room_roulette","🎲｜ルーレット","ROULETTE"),
-    ("v2_room_mines","💣｜マインズ","MINES"),
-    ("v2_room_chinchiro","🎲｜ダイス","CHINCHIRO"),
-    ("v2_room_chohan","🎴｜丁半博打","CHOHAN"),
-    ("v2_room_coin","🪙｜コイントス","COIN"),
-    ("v2_room_highlow","📈｜ハイアンドロー","HIGHLOW"),
-    ("v2_room_crash","🚀｜クラッシュ","CRASH"),
-    ("v2_room_lottery","🎫｜宝くじ","LOTTERY"),
-    ("v2_room_loto6","🎫｜ロト6","LOTO6"),
-    ("v2_room_gacha","🎁｜ガチャ","GACHA"),
-]
+
+def _split_display_name(display_name):
+    """"🎰 3リールスロット" のような表示名を絵文字とゲーム名に分割する。"""
+    parts=str(display_name).split(" ",1)
+    if len(parts)==2:
+        return parts[0],parts[1]
+    return "🎮",str(display_name)
+
+
+async def _build_game_rooms():
+    """GAMEカテゴリのチャンネル一覧を casino.games（ゲーム登録一覧）から動的に組み立てる。
+    新しいゲームを casino.games に implemented=TRUE で登録するだけで、
+    このファイルを書き換えなくても専用チャンネルが自動生成されるようになる。
+    戻り値: [(map_key, チャンネル名, ゲームキー), ...]
+    ※ GACHA（1日1回ガチャ）は casino.games に存在しない特別枠のため固定で追加する。"""
+    rooms=[]
+    for r in await games():
+        if not r["implemented"]:
+            continue
+        key=r["game_key"]
+        emoji,name=_split_display_name(r["display_name"])
+        rooms.append((v2_room_map_key(key),f"{emoji}｜{name}",key))
+    rooms.append((v2_room_map_key("GACHA"),"🎁｜ガチャ","GACHA"))
+    return rooms
 
 
 def _v2_overwrites(guild):
@@ -318,8 +326,10 @@ async def _ensure_v2_channel(guild,category,name,topic,map_key,overwrites,counts
 
 async def ensure_v2_structure(guild):
     """!casinosetup 本体。既存のカテゴリ／チャンネルは再利用し、不足分（削除されたもの）だけ復旧する。
+    GAMEカテゴリのチャンネルは casino.games（ゲーム登録一覧）から動的に組み立てるため、
+    新しいゲームを登録するだけでこの関数を書き換えずに専用チャンネルが増える。
     DB（CHIP・ゲームデータ・ランキング・宝くじ・ロト6・確率・各ゲーム設定・全ユーザーデータ）には一切触れない。"""
-    counts={"created":0,"restored":0,"reused":0}
+    counts={"created":0,"restored":0,"reused":0,"game_channels":0}
     overwrites=_v2_overwrites(guild)
     main_cat=await _ensure_v2_category(guild,V2_MAIN_CAT_NAME,V2_MAIN_CAT_KEY,overwrites,counts)
     game_cat=await _ensure_v2_category(guild,V2_GAME_CAT_NAME,V2_GAME_CAT_KEY,overwrites,counts)
@@ -327,9 +337,12 @@ async def ensure_v2_structure(guild):
     channels={}
     for map_key,name,topic in V2_MAIN_CHANNELS:
         channels[map_key]=await _ensure_v2_channel(guild,main_cat,name,topic,map_key,overwrites,counts)
-    for map_key,name,_game_key in V2_GAME_ROOMS:
+
+    game_rooms=await _build_game_rooms()
+    for map_key,name,_game_key in game_rooms:
         topic=f"PAL CASINO｜{name} 専用チャンネル（結果もここに公開されます）"
         channels[map_key]=await _ensure_v2_channel(guild,game_cat,name,topic,map_key,overwrites,counts)
+    counts["game_channels"]=len(game_rooms)
 
     return main_cat,game_cat,channels,counts
 
@@ -341,7 +354,7 @@ async def get_v2_channels(guild):
         cid=await map_get(map_key)
         ch=guild.get_channel(int(cid)) if cid else None
         if ch:channels[map_key]=ch
-    for map_key,_name,_game_key in V2_GAME_ROOMS:
+    for map_key,_name,_game_key in await _build_game_rooms():
         cid=await map_get(map_key)
         ch=guild.get_channel(int(cid)) if cid else None
         if ch:channels[map_key]=ch
@@ -391,7 +404,7 @@ async def install_v2_panels(guild,channels):
             CasinoAdminView(),"v2_msg_admin",
         )
 
-    for map_key,_name,game_key in V2_GAME_ROOMS:
+    for map_key,_name,game_key in await _build_game_rooms():
         ch=channels.get(map_key)
         if not ch:continue
         if game_key=="GACHA":
@@ -425,9 +438,13 @@ async def delete_v2_structure(guild):
     """Discord側（🎰 PAL CASINO／🎮 GAMEのカテゴリ・チャンネル・パネル）のみを削除する。
     チャンネルIDの記録（channel_map）はあえて消さずに残す。次回!casinosetup実行時に
     「そのIDのチャンネルが存在しない＝復旧対象」として検知させ、不足分だけ自動復元するため。
-    CHIP・ゲームデータ・ランキング・宝くじ・ロト6・確率・各ゲーム設定・全ユーザーデータは削除しない。"""
+    CHIP・ゲームデータ・ランキング・宝くじ・ロト6・確率・各ゲーム設定・全ユーザーデータは削除しない。
+
+    削除漏れ防止のため、追跡している map_key のチャンネルを消すだけでなく、
+    最終的に 🎰 PAL CASINO ／ 🎮 GAME 両カテゴリの中に残っている全チャンネルも
+    ざらいで削除してから、カテゴリ自体を削除する。"""
     deleted=[]
-    channel_keys=[k for k,_n,_t in V2_MAIN_CHANNELS]+[k for k,_n,_g in V2_GAME_ROOMS]
+    channel_keys=[k for k,_n,_t in V2_MAIN_CHANNELS]+[k for k,_n,_g in await _build_game_rooms()]
     for map_key in channel_keys:
         cid=await map_get(map_key)
         if cid:
@@ -443,6 +460,13 @@ async def delete_v2_structure(guild):
         cid=await map_get(cat_key)
         cat=guild.get_channel(int(cid)) if cid else discord.utils.get(guild.categories,name=cat_name)
         if cat:
+            # 追跡外のチャンネルが万一残っていても削除漏れが無いよう、カテゴリ内を総ざらいする。
+            for ch in list(cat.channels):
+                try:
+                    await ch.delete(reason="PAL CASINO v2 system delete (Discord側のみ)")
+                    if ch.name not in deleted:deleted.append(ch.name)
+                except discord.HTTPException:
+                    pass
             try:
                 await cat.delete(reason="PAL CASINO v2 system delete (Discord側のみ)")
                 deleted.append(cat.name)

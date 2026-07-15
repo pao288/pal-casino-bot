@@ -102,7 +102,8 @@ async def casinosetup(ctx):
         "✅ PAL CASINOシステム確認完了\n"
         f"新規作成: {counts['created']}件\n"
         f"復旧: {counts['restored']}件\n"
-        f"再利用: {counts['reused']}件\n\n"
+        f"再利用: {counts['reused']}件\n"
+        f"ゲームチャンネル数: {counts['game_channels']}\n\n"
         "一般ユーザーは閲覧のみ可能（送信・添付・リアクション・スレッド不可）、BOTと管理者は通常通り操作できます。"
     ))
 
