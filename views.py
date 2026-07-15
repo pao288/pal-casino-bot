@@ -1,7 +1,7 @@
 import discord, asyncio
 from casino_db import games,game,profile,history,ranking_chip,ranking_maxwin,total_stats,setting,set_setting,chip_balance,pool,config_get,config_set,audit_global,game_stats
 from casino_services import play_slot,play_coin,play_roulette,play_scratch,start_scratch,finish_scratch,play_chinchiro,start_chohan,finish_chohan,start_highlow,highlow_step,finish_highlow,create_crash,finish_crash,start_mines,mines_open,finish_mines,start_blackjack,blackjack_hit,finish_blackjack
-from lottery_service import buy_lottery,buy_loto,quick_pick,draw_lottery,draw_loto,lottery_user_overview,loto_user_overview,ensure_lottery_draw,ensure_loto_draw,latest_lottery_result,latest_loto_result
+from lottery_service import buy_lottery,buy_loto,quick_pick,draw_lottery,draw_loto,lottery_user_overview,loto_user_overview,ensure_lottery_draw,ensure_loto_draw,latest_lottery_result,latest_loto_result,JST
 
 GOLD=0xF1C40F
 DARK=0x2B2D31
@@ -254,7 +254,18 @@ class ChoiceBetModal(discord.ui.Modal):
             bet=int(str(self.bet).replace(",",""))
             if self.key=="COIN":r=await play_coin(i.user.id,bet,self.choice)
             elif self.key=="CHOHAN":r=await play_chohan(i.user.id,bet,self.choice)
-            else:r=await play_roulette(i.user.id,bet,self.choice)
+            else:
+                wheel=[0,32,15,19,4,21,2,25,17,34,6,27,13,36,11,30,8,23,10,5,24,16,33,1,20,14,31,9,22,18,29,7,28,12,35,3,26]
+                for step in range(12):
+                    n=wheel[(step*3+__import__("random").randint(0,2))%len(wheel)]
+                    icon="🟢" if n==0 else ("🔴" if n in {1,3,5,7,9,12,14,16,18,19,21,23,25,27,30,32,34,36} else "⚫")
+                    await i.edit_original_response(embed=emb("🎡 ROULETTE",f"# {icon} {n}\n\nルーレット回転中……\n▰▰▰▰▰▰▰▰",GOLD),content=None,view=None)
+                    await asyncio.sleep(0.18+step*0.035)
+                r=await play_roulette(i.user.id,bet,self.choice)
+                if r.get("status")=="SUCCESS":
+                    n=r["number"];icon="🟢" if n==0 else ("🔴" if r["color"]=="赤" else "⚫")
+                    await i.edit_original_response(embed=emb("🎡 BALL STOP",f"# {icon} {n}\n\n**{r['color']}｜{n}** に停止！",GOLD))
+                    await asyncio.sleep(1.1)
             await public_result(i,r,self.key)
         except Exception as ex:await i.edit_original_response(content=f"ゲームエラー: `{type(ex).__name__}` / `{str(ex)[:500]}`")
 
@@ -460,34 +471,30 @@ class BlackjackView(discord.ui.View):
     @discord.ui.button(label="SURRENDER",style=discord.ButtonStyle.danger)
     async def surrender(self,i,b):await i.response.defer();r=await finish_blackjack(i.user.id,self.state,"SURRENDER");await public_result(i,r,"BLACKJACK")
 
-class MinesBetModal(discord.ui.Modal,title="💣 MINES 6×6"):
+class MinesBetModal(discord.ui.Modal,title="💣 MINES 5×5"):
     bet=discord.ui.TextInput(label="BET CHIP",placeholder="100～10,000")
-    mines=discord.ui.TextInput(label="爆弾数 1～35",placeholder="5",max_length=2)
+    mines=discord.ui.TextInput(label="爆弾数 1～24",placeholder="5",max_length=2)
     async def on_submit(self,i):
         await i.response.defer(ephemeral=True,thinking=True)
-        state=await start_mines(i.user.id,int(str(self.bet).replace(",","")),int(self.mines))
-        if state["status"]!="SUCCESS":await i.edit_original_response(content=f"MINES: `{state['status']}`");return
-        await i.edit_original_response(embed=mines_embed(state,0),view=MinesView(i.user.id,state,0),content=None)
-def mines_board_text(state,page):
-    start=page*18;end=min(start+18,36)
-    cells=["💎" if c in state["opened"] else "⬜" for c in range(start,end)]
-    return "\n".join(" ".join(cells[r:r+6]) for r in range(0,len(cells),6))
+        state=await start_mines(i.user.id,int(str(self.bet).replace(",","").strip()),int(str(self.mines).strip()))
+        if state["status"]!="SUCCESS":
+            await i.edit_original_response(content=f"MINES: `{state['status']}`");return
+        await i.edit_original_response(embed=mines_embed(state),view=MinesView(i.user.id,state),content=None)
+        await i.followup.send("💰 好きなタイミングで換金できます。",view=MinesCashoutView(i.user.id,state),ephemeral=True)
 
-def mines_embed(s,page=0,exploded=None):
-    start=page*18;end=min(start+18,36)
+def mines_embed(s,exploded=None):
     cells=[]
-    for c in range(start,end):
+    for c in range(25):
         if exploded is not None and c==exploded:cells.append("💥")
         elif exploded is not None and c in s["mine_set"]:cells.append("💣")
         elif c in s["opened"]:cells.append("💎")
-        else:cells.append("⬜")
-    board="\n".join(" ".join(cells[r:r+6]) for r in range(0,len(cells),6))
-    return emb("💣 MINES 6×6",f"```\n{board}\n```\n💣 爆弾 **{s['mines']}個**\n💎 OPEN **{len(s['opened'])}マス**\n📈 現在 **×{s['multiplier']}**\n\n盤面 **{page+1} / 2**｜マスを選んで開ける",GOLD)
+        else:cells.append("❔")
+    board="\n".join(" ".join(cells[r:r+5]) for r in range(0,25,5))
+    return emb("💣 MINES｜5×5",f"```\n{board}\n```\n💣 爆弾 **{s['mines']}個**\n💎 OPEN **{len(s['opened'])}マス**\n📈 現在 **×{s['multiplier']}**\n\nスクラッチ感覚で好きなマスを選択",GOLD)
 
 class MineButton(discord.ui.Button):
-    def __init__(self,cell,page):
-        super().__init__(label="⬜",style=discord.ButtonStyle.secondary,row=(cell-page*18)//5)
-        self.cell=cell
+    def __init__(self,cell):
+        super().__init__(label=str(cell+1),style=discord.ButtonStyle.secondary,row=cell//5);self.cell=cell
     async def callback(self,i):
         view=self.view
         if i.user.id!=view.uid:
@@ -497,41 +504,42 @@ class MineButton(discord.ui.Button):
             await i.response.send_message("このマスは開いています。",ephemeral=True);return
         if x["status"]=="MINE":
             for item in view.children:item.disabled=True
+            self.label="💥";self.style=discord.ButtonStyle.danger
             await i.response.defer()
-            await i.edit_original_response(embed=mines_embed(view.state,view.page,self.cell),view=view)
+            await i.edit_original_response(embed=mines_embed(view.state,self.cell),view=view)
             await asyncio.sleep(1.2)
             r=await finish_mines(i.user.id,view.state,False)
             await public_result(i,r,"MINES","💥 MINE HIT")
         else:
             self.label="💎";self.disabled=True;self.style=discord.ButtonStyle.success
-            await i.response.edit_message(embed=mines_embed(view.state,view.page),view=view)
+            await i.response.edit_message(embed=mines_embed(view.state),view=view)
 
 class MinesView(discord.ui.View):
-    def __init__(self,uid,state,page):
-        super().__init__(timeout=300);self.uid=uid;self.state=state;self.page=page;self.rebuild()
-    def rebuild(self):
-        self.clear_items()
-        for c in range(self.page*18,min(self.page*18+18,36)):
-            b=MineButton(c,self.page)
-            if c in self.state["opened"]:b.label="💎";b.disabled=True;b.style=discord.ButtonStyle.success
+    def __init__(self,uid,state,page=0):
+        super().__init__(timeout=300);self.uid=uid;self.state=state
+        for c in range(25):
+            b=MineButton(c)
+            if c in state["opened"]:b.label="💎";b.disabled=True;b.style=discord.ButtonStyle.success
             self.add_item(b)
-        nav=discord.ui.Button(label="次の盤面 ▶" if self.page==0 else "◀ 前の盤面",style=discord.ButtonStyle.primary,row=4)
-        nav.callback=self.nav;self.add_item(nav)
-        cash=discord.ui.Button(label="💰 CASH OUT",style=discord.ButtonStyle.success,row=4)
-        cash.callback=self.cash;self.add_item(cash)
-    async def nav(self,i):
+
+class MinesCashoutView(discord.ui.View):
+    def __init__(self,uid,state):
+        super().__init__(timeout=300);self.uid=uid;self.state=state;self.done=False
+    @discord.ui.button(label="💰 CASH OUT",style=discord.ButtonStyle.success)
+    async def cash(self,i,b):
         if i.user.id!=self.uid:
             await i.response.send_message("プレイヤー専用です。",ephemeral=True);return
-        self.page=1-self.page;self.rebuild()
-        await i.response.edit_message(embed=mines_embed(self.state,self.page),view=self)
-    async def cash(self,i):
-        if i.user.id!=self.uid:
-            await i.response.send_message("プレイヤー専用です。",ephemeral=True);return
+        if self.done:
+            await i.response.send_message("このゲームは終了しています。",ephemeral=True);return
         if not self.state["opened"]:
             await i.response.send_message("最低1マス開けてからCASH OUTできます。",ephemeral=True);return
-        await i.response.defer()
+        self.done=True;b.disabled=True
+        await i.response.edit_message(content="💰 CASH OUT処理中……",view=self)
         r=await finish_mines(i.user.id,self.state,True)
-        await public_result(i,r,"MINES","💰 MINES CASH OUT")
+        if r.get("status")=="SUCCESS":
+            e=emb("💰 MINES CASH OUT",f"BET **{r['bet']:,} CHIP**\nPAYOUT **{r['payout']:,} CHIP**\n収支 **{r['profit']:+,} CHIP**\n倍率 **×{r['multiplier']}**\n現在残高 **{r['balance']:,} CHIP**",GOLD)
+            await i.followup.send(embed=e,ephemeral=True)
+        else:await i.followup.send(f"MINES: `{r.get('status')}`",ephemeral=True)
 
 
 class HighlowBetModal(discord.ui.Modal,title="📈 HIGH & LOW"):
@@ -540,7 +548,14 @@ class HighlowBetModal(discord.ui.Modal,title="📈 HIGH & LOW"):
         await i.response.defer(ephemeral=True,thinking=True);s=await start_highlow(i.user.id,int(str(self.bet).replace(",","")))
         if s["status"]!="SUCCESS":await i.edit_original_response(content=f"HIGHLOW: `{s['status']}`");return
         await i.edit_original_response(embed=highlow_embed(s),view=HighlowView(i.user.id,s),content=None)
-def highlow_embed(s):return emb("📈 HIGH & LOW",f"現在カード **{s['current']}**\n現在倍率 **×{s['multiplier']}**\n\nHIGH / LOW を選択",GOLD)
+def highlow_joker_hint(s):
+    mult=s.get("multiplier",1)
+    if mult>=8:return "\n\n🃏 **カードの奥から、妙な気配がする……**"
+    if mult>=4:return "\n\n🎴 **山札が少しざわついている。**"
+    if mult>=2:return "\n\n👁️ **一瞬だけ、見慣れない影が見えた気がした。**"
+    return ""
+def highlow_embed(s):
+    return emb("📈 HIGH & LOW",f"現在カード **{s['current']}**\n現在倍率 **×{s['multiplier']}**\n\nHIGH / LOW を選択{highlow_joker_hint(s)}",GOLD)
 class HighlowView(discord.ui.View):
     def __init__(self,uid,state):super().__init__(timeout=300);self.uid=uid;self.state=state
     async def choose(self,i,choice):
@@ -571,7 +586,7 @@ DIRECT_GAME_INFO={
 "CHINCHIRO":("🎲 チンチロ","3つのサイコロでNPCの親と役・出目を競うゲーム。"),
 "CHOHAN":("🎴 丁半博打","BET後にサイコロとNPCのセリフを確認し、合計が偶数の丁か奇数の半かを張るゲーム。"),
 "COIN":("🪙 コイントス","表か裏を選んでコイン勝負。特殊な大量コイン演出が発生することもあります。"),
-"HIGHLOW":("📈 ハイアンドロー","次のカードがHIGHかLOWかを予想。勝つほど倍率が上がり、途中換金できます。"),
+"HIGHLOW":("📈 ハイアンドロー","次のカードがHIGHかLOWかを予想。勝つほど倍率が上がり、途中換金できます。ダブルアップ中、山札にはジョーカーが潜んでいます。"),
 "CRASH":("🚀 CRASH LIVE","リアルタイムで上がる倍率を見ながら、爆発前にCASH OUTするゲーム。"),
 }
 
@@ -858,8 +873,14 @@ class SystemView(discord.ui.View):
             r=await draw_lottery();await ensure_lottery_draw()
             cid=await pool().fetchval("SELECT channel_id FROM casino.channel_map WHERE map_key='status'")
             ch=i.guild.get_channel(int(cid)) if cid else None
-            text=f"**第{r['draw_no']}回**\n\n🎯 当選番号\n## {r['group']:02d}組 {r['number']:06d}番\n\n当選券 **{len(r['winners'])}件**"
-            if ch:await ch.send(embed=emb("🎊 PAL CASINO｜宝くじ抽選結果",text+"\n\n🏆 自分の結果は宝くじチャンネルから確認できます。",GOLD))
+            winner_lines=[]
+            for uid,rank,prize,g,n in r["winners"]:
+                member=i.guild.get_member(int(uid))
+                who=member.mention if member else f"<@{uid}>"
+                winner_lines.append(f"🎉 {who} さんが **{rank}** に当選しました！｜**{prize:,} CHIP**")
+            winners_text="\n".join(winner_lines) if winner_lines else "今回は当選者なし"
+            text=f"**第{r['draw_no']}回**\n\n🎯 当選番号\n## {r['group']:02d}組 {r['number']:06d}番\n\n🏆 **当選発表**\n{winners_text}"
+            if ch:await ch.send(embed=emb("🎊 PAL CASINO｜宝くじ抽選結果",text,GOLD))
             await i.edit_original_response(content=f"🎊 第{r['draw_no']}回 宝くじ抽選完了\n\n**{r['group']:02d}組 {r['number']:06d}番**")
         except Exception as ex:await i.edit_original_response(content=f"宝くじ抽選エラー: `{type(ex).__name__}`\n`{str(ex)[:800]}`")
     @discord.ui.button(label="🔢 ロト6抽選",style=discord.ButtonStyle.danger)
@@ -869,8 +890,14 @@ class SystemView(discord.ui.View):
             r=await draw_loto();await ensure_loto_draw();nums=" / ".join(map(str,r["winning"]))
             cid=await pool().fetchval("SELECT channel_id FROM casino.channel_map WHERE map_key='status'")
             ch=i.guild.get_channel(int(cid)) if cid else None
-            text=f"**第{r['draw_no']}回**\n\n🎯 本数字\n## {nums}\n\nBONUS **{r['bonus']}**\n\n次回繰越 **{r['carryover']:,} CHIP**"
-            if ch:await ch.send(embed=emb("🔢 PAL CASINO｜ロト6抽選結果",text+"\n\n🏆 自分の結果はロト6チャンネルから確認できます。",GOLD))
+            winner_lines=[]
+            for uid,rank,prize,numbers in r["winners"]:
+                member=i.guild.get_member(int(uid))
+                who=member.mention if member else f"<@{uid}>"
+                winner_lines.append(f"🎉 {who} さんが **{rank}等** に当選しました！｜**{prize:,} CHIP**")
+            winners_text="\n".join(winner_lines) if winner_lines else "今回は当選者なし"
+            text=f"**第{r['draw_no']}回**\n\n🎯 本数字\n## {nums}\n\nBONUS **{r['bonus']}**\n\n🏆 **当選発表**\n{winners_text}\n\n次回繰越 **{r['carryover']:,} CHIP**"
+            if ch:await ch.send(embed=emb("🔢 PAL CASINO｜ロト6抽選結果",text,GOLD))
             await i.edit_original_response(content=f"🔢 第{r['draw_no']}回 ロト6抽選完了\n\n本数字 **{nums}**\nBONUS **{r['bonus']}**")
         except Exception as ex:await i.edit_original_response(content=f"ロト6抽選エラー: `{type(ex).__name__}`\n`{str(ex)[:800]}`")
 

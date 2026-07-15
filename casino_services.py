@@ -290,17 +290,17 @@ async def finish_crash(uid,state,cashout=None):
 async def start_mines(user_id,bet,mines):
     bad=await _limits(user_id,"MINES",bet)
     if bad:return bad
-    if not 1<=mines<=35:return {"status":"INVALID_MINES"}
+    if not 1<=mines<=24:return {"status":"INVALID_MINES"}
     r=await reserve_bet(user_id,"MINES",bet)
     if r["status"]!="SUCCESS":return r
-    return {**r,"mines":mines,"mine_set":set(random.sample(range(36),mines)),"opened":set(),"multiplier":1.0}
+    return {**r,"mines":mines,"mine_set":set(random.sample(range(25),mines)),"opened":set(),"multiplier":1.0}
 
 def mines_open(state,cell):
     if cell in state["opened"]:return {"status":"ALREADY_OPEN"}
     if cell in state["mine_set"]:return {"status":"MINE"}
     state["opened"].add(cell)
-    safe=36-state["mines"];opened=len(state["opened"])
-    state["multiplier"]=round((36/safe)**opened*0.97,2)
+    safe=25-state["mines"];opened=len(state["opened"])
+    state["multiplier"]=round((25/safe)**opened*0.97,2)
     return {"status":"SAFE","multiplier":state["multiplier"]}
 
 async def finish_mines(uid,state,won):
