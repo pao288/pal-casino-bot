@@ -39,8 +39,6 @@ async def setup_hook():
     for _key in ["SLOT3","SCRATCH","BLACKJACK","ROULETTE","MINES","CHINCHIRO","CHOHAN","COIN","HIGHLOW","CRASH"]:
         bot.add_view(DirectGamePanel(_key))
     bot.add_view(DailyPanel())
-    bot.add_view(LotteryLaunchView())
-    bot.add_view(LotoLaunchView())
     bot.add_view(SetupView())
     log.info("DB・BANK Gateway接続完了")
 
