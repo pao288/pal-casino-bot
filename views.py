@@ -58,7 +58,7 @@ class LotteryBuyModal(discord.ui.Modal,title="🎫 PAL 宝くじ"):
     count=discord.ui.TextInput(label="購入枚数",placeholder="1～100",max_length=3)
     async def on_submit(self,i):
         await i.response.defer(ephemeral=True,thinking=True)
-        try:r=await buy_lottery(i.user.id,int(str(self.count).replace(",","").strip()))
+        try:r=await buy_lottery(i.user.id,int(str(self.count.value).replace(",","").strip()))
         except Exception as ex:await i.edit_original_response(content=f"宝くじエラー: `{type(ex).__name__}`\n`{str(ex)[:700]}`");return
         if r["status"]!="SUCCESS":await i.edit_original_response(content=f"購入処理: `{r['status']}`");return
         preview="\n".join(f"`{g:02d}組 {n:06d}番`" for _,g,n in r["tickets"][:20])
@@ -68,7 +68,7 @@ class LotoBuyModal(discord.ui.Modal,title="🔢 ロト6"):
     numbers=discord.ui.TextInput(label="1～43から6個",placeholder="3,8,14,21,32,41",max_length=30)
     async def on_submit(self,i):
         await i.response.defer(ephemeral=True,thinking=True)
-        try:nums=[int(x.strip()) for x in str(self.numbers).replace("、",",").split(",")];r=await buy_loto(i.user.id,nums)
+        try:nums=[int(x.strip()) for x in str(self.numbers.value).replace("、",",").split(",")];r=await buy_loto(i.user.id,nums)
         except Exception as ex:await i.edit_original_response(content=f"ロト6エラー: `{type(ex).__name__}`\n`{str(ex)[:700]}`");return
         if r["status"]!="SUCCESS":await i.edit_original_response(content=f"購入処理: `{r['status']}`");return
         await i.edit_original_response(content=f"🔢 第{r['draw_no']}回 ロト6購入完了\n**{' / '.join(map(str,r['numbers']))}**\n💰 {r['cost']:,} CHIP")
@@ -81,14 +81,12 @@ class LotteryMyTicketsView(discord.ui.View):
     def __init__(self):super().__init__(timeout=120)
     @discord.ui.button(label="🎫 宝くじ履歴",style=discord.ButtonStyle.secondary)
     async def lottery(self,i,b):
-        data=await lottery_user_overview(i.user.id)
-        rows=data["tickets"]
-        text="\n".join(
-            f"`#{r['ticket_id']}` 第{r['draw_no']}回 **{r['ticket_group']:02d}組 {r['ticket_number']:06d}番**｜{r['rank'] or ('抽選待ち' if r['draw_status']=='OPEN' else 'はずれ')}"+(f"｜**{r['prize']:,} CHIP**" if r['prize'] else "")
-            for r in rows
-        )
-        d=data["draw"]
-        await i.response.send_message(embed=emb("🎫 MY LOTTERY",f"次回抽選 **{jst_time(d['draw_at'])} JST**\n\n{text or '購入券なし'}",GOLD),ephemeral=True)
+        try:
+            data=await lottery_user_overview(i.user.id);rows=data["tickets"];d=data["draw"]
+            text="\n".join(f"`#{r['ticket_id']}` 第{r['draw_no']}回 **{r['ticket_group']:02d}組 {r['ticket_number']:06d}番**｜{r['rank'] or ('抽選待ち' if r['draw_status']=='OPEN' else 'はずれ')}"+(f"｜**{r['prize']:,} CHIP**" if r['prize'] else "") for r in rows)
+            await i.response.send_message(embed=emb("🎫 MY LOTTERY",f"次回抽選 **{jst_time(d['draw_at'])} JST**\n\n{text or '購入券なし'}",GOLD),ephemeral=True)
+        except Exception as e:
+            await i.response.send_message(f"🎫 MY LOTTERY ERROR: `{type(e).__name__}: {e}`",ephemeral=True)
     @discord.ui.button(label="🔢 ロト6履歴",style=discord.ButtonStyle.secondary)
     async def loto(self,i,b):
         data=await loto_user_overview(i.user.id)
@@ -146,7 +144,7 @@ class BetModal(discord.ui.Modal):
     def __init__(self,key,callback):
         super().__init__(title=GAME_NAMES[key][:45]);self.key=key;self._callback=callback
     async def on_submit(self,i):
-        try:bet=int(str(self.bet).replace(",","").strip())
+        try:bet=int(str(self.bet.value).replace(",","").strip())
         except:await i.response.send_message("BETは整数で入力してください。",ephemeral=True);return
         await self._callback(i,bet)
 
@@ -185,7 +183,7 @@ class SlotBetModal(discord.ui.Modal,title="🎰 3リールスロット"):
     async def on_submit(self,i):
         await i.response.defer(ephemeral=True,thinking=True)
         try:
-            bet=int(str(self.bet).replace(",",""))
+            bet=int(str(self.bet.value).replace(",",""))
             frames=["🍒  ❔  ❔","🍋  💎  ❔","7️⃣  🍒  🍋","💎  7️⃣  🍒","🍒  🍋  💎"]
             for n in range(10):
                 frame=frames[n%len(frames)]
@@ -251,7 +249,7 @@ class ChoiceBetModal(discord.ui.Modal):
     async def on_submit(self,i):
         await i.response.defer(ephemeral=True,thinking=True)
         try:
-            bet=int(str(self.bet).replace(",",""))
+            bet=int(str(self.bet.value).replace(",",""))
             if self.key=="COIN":r=await play_coin(i.user.id,bet,self.choice)
             elif self.key=="CHOHAN":r=await play_chohan(i.user.id,bet,self.choice)
             else:
@@ -275,7 +273,7 @@ class CoinBetModal(discord.ui.Modal):
         super().__init__(title=f"🪙 コイントス｜{choice}");self.choice=choice
     async def on_submit(self,i):
         await i.response.defer(ephemeral=True,thinking=True)
-        try:bet=int(str(self.bet).replace(",","").strip())
+        try:bet=int(str(self.bet.value).replace(",","").strip())
         except:await i.edit_original_response(content="BETは整数で入力してください。");return
         for frame in ["🪙","⚪","🟡","⚪","🪙","⚪"]:
             await i.edit_original_response(embed=emb("🪙 COIN TOSS",f"# {frame}\n\nコインが回転中……",GOLD),content=None,view=None)
@@ -302,7 +300,7 @@ class ChohanBetModal(discord.ui.Modal,title="🎴 丁半博打"):
     async def on_submit(self,i):
         await i.response.defer(ephemeral=True,thinking=True)
         try:
-            state=await start_chohan(i.user.id,int(str(self.bet).replace(",","")))
+            state=await start_chohan(i.user.id,int(str(self.bet.value).replace(",","")))
             if state["status"]!="SUCCESS":await i.edit_original_response(content=f"丁半: `{state['status']}`");return
             if state.get("special")=="サイコロなし":
                 await i.edit_original_response(embed=emb("🎴 丁半博打","🎲 ……\n\n**サイコロがない。**\n\n「……おい。これはどういうことだ？」",GOLD),view=ChohanChoiceView(i.user.id,state))
@@ -325,7 +323,7 @@ class ChinchiroModal(discord.ui.Modal,title="🎲 チンチロ"):
     async def on_submit(self,i):
         await i.response.defer(ephemeral=True,thinking=True)
         try:
-            bet=int(str(self.bet).replace(",","").strip())
+            bet=int(str(self.bet.value).replace(",","").strip())
             dice=["⚀","⚁","⚂","⚃","⚄","⚅"]
             for n in range(8):
                 roll=" ".join(__import__("random").choice(dice) for _ in range(3))
@@ -350,8 +348,8 @@ class RouletteNumberModal(discord.ui.Modal,title="🎡 単一数字BET"):
     async def on_submit(self,i):
         await i.response.defer(ephemeral=True,thinking=True)
         try:
-            n=int(self.number);assert 0<=n<=36
-            r=await play_roulette(i.user.id,int(str(self.bet).replace(",","")),f"NUM:{n}");await public_result(i,r,"ROULETTE")
+            n=int(str(self.number.value).replace(",","").strip());assert 0<=n<=36
+            r=await play_roulette(i.user.id,int(str(self.bet.value).replace(",","")),f"NUM:{n}");await public_result(i,r,"ROULETTE")
         except Exception as ex:await i.edit_original_response(content=f"数字は0～36。`{type(ex).__name__}`")
 
 class RouletteNumberButton(discord.ui.Button):
@@ -398,7 +396,7 @@ class CrashBetModal(discord.ui.Modal,title="🚀 CRASH LIVE"):
     bet=discord.ui.TextInput(label="BET CHIP",placeholder="100～10,000")
     auto=discord.ui.TextInput(label="自動CASH OUT倍率",placeholder="空欄=手動 / 例 2.50",required=False)
     async def on_submit(self,i):
-        try:bet=int(str(self.bet).replace(",",""));auto=float(self.auto) if str(self.auto).strip() else None
+        try:bet=int(str(self.bet.value).replace(",",""));auto=float(str(self.auto.value).replace(",","").strip()) if str(self.auto.value).strip() else None
         except:await i.response.send_message("BET / 倍率を確認してください。",ephemeral=True);return
         await i.response.defer(ephemeral=True,thinking=True)
         state=await create_crash(i.user.id,bet,auto)
@@ -443,7 +441,7 @@ class BlackjackBetModal(discord.ui.Modal,title="🃏 BLACKJACK"):
     bet=discord.ui.TextInput(label="BET CHIP",placeholder="100～10,000")
     async def on_submit(self,i):
         await i.response.defer(ephemeral=True,thinking=True)
-        try:state=await start_blackjack(i.user.id,int(str(self.bet).replace(",","")))
+        try:state=await start_blackjack(i.user.id,int(str(self.bet.value).replace(",","")))
         except Exception as ex:await i.edit_original_response(content=f"BLACKJACK: `{ex}`");return
         if state["status"]!="SUCCESS":await i.edit_original_response(content=f"BLACKJACK: `{state['status']}`");return
         await i.edit_original_response(embed=blackjack_embed(state),view=BlackjackView(i.user.id,state),content=None)
@@ -476,7 +474,7 @@ class MinesBetModal(discord.ui.Modal,title="💣 MINES 5×5"):
     mines=discord.ui.TextInput(label="爆弾数 1～24",placeholder="5",max_length=2)
     async def on_submit(self,i):
         await i.response.defer(ephemeral=True,thinking=True)
-        state=await start_mines(i.user.id,int(str(self.bet).replace(",","").strip()),int(str(self.mines).strip()))
+        state=await start_mines(i.user.id,int(str(self.bet.value).replace(",","").strip()),int(str(self.mines.value).strip()))
         if state["status"]!="SUCCESS":
             await i.edit_original_response(content=f"MINES: `{state['status']}`");return
         await i.edit_original_response(embed=mines_embed(state),view=MinesView(i.user.id,state),content=None)
@@ -545,7 +543,7 @@ class MinesCashoutView(discord.ui.View):
 class HighlowBetModal(discord.ui.Modal,title="📈 HIGH & LOW"):
     bet=discord.ui.TextInput(label="BET CHIP",placeholder="100～10,000")
     async def on_submit(self,i):
-        await i.response.defer(ephemeral=True,thinking=True);s=await start_highlow(i.user.id,int(str(self.bet).replace(",","")))
+        await i.response.defer(ephemeral=True,thinking=True);s=await start_highlow(i.user.id,int(str(self.bet.value).replace(",","")))
         if s["status"]!="SUCCESS":await i.edit_original_response(content=f"HIGHLOW: `{s['status']}`");return
         await i.edit_original_response(embed=highlow_embed(s),view=HighlowView(i.user.id,s),content=None)
 def highlow_joker_hint(s):
@@ -818,10 +816,10 @@ class GameSettingsModal(discord.ui.Modal):
     async def on_submit(self,i):
         await i.response.defer(ephemeral=True,thinking=True)
         try:
-            rate=float(self.payout_rate)
+            rate=float(str(self.payout_rate.value).replace("%","").replace(",","").strip())
             if not 1<=rate<=200:raise ValueError("還元率は1～200")
             await config_set(self.key,"payout_rate",f"{rate:.2f}",i.user.id)
-            raw=str(self.probability).strip()
+            raw=str(self.probability.value).strip()
             if raw:
                 prob=float(raw)
                 if not 0<=prob<=100:raise ValueError("確率は0～100")
@@ -850,7 +848,7 @@ class RTPModal(discord.ui.Modal,title="📈 CASINO全体還元率"):
     async def on_submit(self,i):
         await i.response.defer(ephemeral=True,thinking=True)
         try:
-            val=float(self.target)
+            val=float(str(self.target.value).replace("%","").replace(",","").strip())
             if not 1<=val<=200:raise ValueError("1～200")
             old=await setting("target_rtp","95.00");await set_setting("target_rtp",f"{val:.2f}");await audit_global(i.user.id,"target_rtp",old,f"{val:.2f}")
             cid=await pool().fetchval("SELECT channel_id FROM casino.channel_map WHERE map_key='log'");ch=i.guild.get_channel(int(cid)) if cid else None
@@ -906,7 +904,7 @@ class AdminUserModal(discord.ui.Modal,title="👤 CASINOユーザー確認"):
     async def on_submit(self,i):
         await i.response.defer(ephemeral=True,thinking=True)
         try:
-            uid=int(str(self.user_id).strip());p=await profile(uid);member=i.guild.get_member(uid)
+            uid=int(str(self.user_id.value).strip());p=await profile(uid);member=i.guild.get_member(uid)
             e=emb("👤 CASINO USER",f"{member.mention if member else f'`{uid}`'}",GOLD)
             e.add_field(name="CHIP",value=f"{p['chip']:,} CHIP");e.add_field(name="VIP",value="YES" if p["vip"] else "NO")
             e.add_field(name="総プレイ",value=f"{p['plays']:,}回");e.add_field(name="総BET",value=f"{p['total_bet']:,} CHIP")
@@ -919,7 +917,7 @@ class AdminTransactionSearchModal(discord.ui.Modal,title="📖 CASINO取引検�
     query=discord.ui.TextInput(label="User ID または Round ID",placeholder="Discord User ID / SLOT3-...",max_length=100)
     async def on_submit(self,i):
         await i.response.defer(ephemeral=True,thinking=True)
-        q=str(self.query).strip()
+        q=str(self.query.value).strip()
         if q.isdigit():
             rows=await pool().fetch("SELECT * FROM casino.rounds WHERE user_id=$1 ORDER BY created_at DESC LIMIT 25",q)
         else:

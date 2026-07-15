@@ -1,0 +1,14 @@
+{
+  "compile_errors": [],
+  "direct_textinput_casts": [],
+  "textinput_str_without_value": [],
+  "python_files": [
+    "bank_gateway_for_other_bots.py",
+    "casino_db.py",
+    "casino_services.py",
+    "lottery_service.py",
+    "main.py",
+    "setup_service.py",
+    "views.py"
+  ]
+}
