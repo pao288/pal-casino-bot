@@ -1,5 +1,5 @@
 import discord
-from casino_db import map_get, map_set, map_clear, pool
+from casino_db import map_get, map_set, map_clear, pool, games
 from views import (
     CasinoAdminView, CasinoLobbyView, DirectGamePanel, DailyPanel,
     LotteryLaunchView, LotoLaunchView, DIRECT_GAME_INFO,
@@ -120,6 +120,49 @@ async def install_direct_game_panels(guild,category=None):
     )
     return chs
 
+async def build_status_embed(guild):
+    rows=await games()
+    lines=[]
+    for r in rows:
+        key=r["game_key"]
+        if key in ("LOTTERY","LOTO6"):
+            map_key="lottery" if key=="LOTTERY" else "loto6"
+        else:
+            matches=[mk for mk,_n,gk in GAME_CHANNELS if gk==key]
+            if not matches:continue
+            map_key=matches[0]
+        cid=await map_get(map_key)
+        is_open=bool(r["enabled"] and r["implemented"])
+        line=f"{'🟢 営業中' if is_open else '🔴 休止中'}｜**{r['display_name']}**"
+        if is_open and cid:line+=f"\n↳ <#{int(cid)}>"
+        lines.append(line)
+    active=sum(1 for r in rows if r["enabled"] and r["implemented"])
+    return emb("🟢 PAL CASINO｜営業案内" if active else "🔴 PAL CASINO｜営業休止",
+      "現在のゲーム営業状況です。\n営業中はチャンネル名を押すと直接移動できます。\n\n"+"\n\n".join(lines),
+      0x2ECC71 if active else 0xE74C3C)
+
+async def refresh_status_panel(guild):
+    cid=await map_get("status")
+    ch=guild.get_channel(int(cid)) if cid else None
+    if not ch:return
+
+    embed=await build_status_embed(guild)
+    mid=await map_get("status_message")
+    msg=None
+
+    if mid:
+        try:
+            msg=await ch.fetch_message(int(mid))
+        except (discord.NotFound,discord.Forbidden,discord.HTTPException):
+            msg=None
+
+    if msg:
+        await msg.edit(embed=embed)
+    else:
+        msg=await ch.send(embed=embed)
+        await map_set("status_message",msg.id)
+
+
 async def install_panels(guild):
     chs=await install_direct_game_panels(guild)
 
@@ -142,14 +185,7 @@ async def install_panels(guild):
     await _clear_bot_messages(chs["ranking"],guild)
     await chs["ranking"].send(embed=await ranking_embed())
 
-    await _clear_bot_messages(chs["status"],guild)
-    await chs["status"].send(embed=emb(
-        "🟢 PAL CASINO STATUS",
-        "**ONLINE**\n\n🎰 スロット / 🎟️ スクラッチ / 🃏 ブラックジャック / 🎡 ルーレット / "
-        "💣 マインズ / 🎲 チンチロ / 🎴 丁半 / 🪙 コイントス / 📈 ハイロー / 🚀 クラッシュ\n"
-        "🎁 1日1回ガチャ / 🎫 宝くじ / 🔢 ロト6",
-        0x2ECC71
-    ))
+    await refresh_status_panel(guild)
 
     await _clear_bot_messages(chs["admin"],guild)
     await chs["admin"].send(embed=emb("🎰 PAL CASINO ADMIN","管理者用CASINOパネル",GOLD),view=CasinoAdminView())

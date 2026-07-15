@@ -3,7 +3,7 @@ from discord.ext import commands
 from casino_db import init_db
 from bank_gateway_for_other_bots import init_bank_gateway
 from views import CasinoPanelView, CasinoAdminView, CasinoLobbyView, DirectGamePanel, DailyPanel, LotteryLaunchView, LotoLaunchView
-from setup_service import install_panels,ensure_structure,delete_structure, install_direct_game_panels
+from setup_service import install_panels,ensure_structure,delete_structure, install_direct_game_panels, refresh_status_panel
 
 logging.basicConfig(level=logging.INFO)
 log=logging.getLogger("pal_casino")
@@ -39,21 +39,24 @@ async def setup_hook():
     for _key in ["SLOT3","SCRATCH","BLACKJACK","ROULETTE","MINES","CHINCHIRO","CHOHAN","COIN","HIGHLOW","CRASH"]:
         bot.add_view(DirectGamePanel(_key))
     bot.add_view(DailyPanel())
+    bot.add_view(LotteryLaunchView())
+    bot.add_view(LotoLaunchView())
     bot.add_view(SetupView())
     log.info("DB・BANK Gateway接続完了")
 
 @bot.event
 async def on_ready():
     for guild in bot.guilds:
-        category = discord.utils.get(guild.categories, name="🎰 PAL CASINO")
+        category=discord.utils.get(guild.categories,name="🎰 PAL CASINO")
         if category:
             try:
-                await install_panels(guild)
-                log.info("ゲーム別固定パネル設置完了: %s", guild.name)
+                await ensure_structure(guild)
+                await refresh_status_panel(guild)
+                log.info("CASINO営業状態同期完了: %s",guild.name)
             except Exception:
-                log.exception("ゲーム別固定パネル設置エラー: %s", guild.name)
+                log.exception("CASINO起動同期エラー: %s",guild.name)
         else:
-            log.warning("カテゴリ「🎰 PAL CASINO」が見つかりません: %s", guild.name)
+            log.warning("カテゴリ「🎰 PAL CASINO」が見つかりません: %s",guild.name)
     log.info("PAL CASINO起動完了: %s",bot.user)
 
 @bot.command()

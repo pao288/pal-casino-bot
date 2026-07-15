@@ -1,7 +1,7 @@
 import discord, asyncio
 from casino_db import games,game,profile,history,ranking_chip,ranking_maxwin,total_stats,setting,set_setting,chip_balance,pool,config_get,config_set,audit_global,game_stats
 from casino_services import play_slot,play_coin,play_roulette,play_scratch,play_chinchiro,start_chohan,finish_chohan,start_highlow,highlow_step,finish_highlow,create_crash,finish_crash,start_mines,mines_open,finish_mines,start_blackjack,blackjack_hit,finish_blackjack
-from lottery_service import buy_lottery,buy_loto,quick_pick,draw_lottery,draw_loto,lottery_user_overview,loto_user_overview,ensure_lottery_draw,ensure_loto_draw
+from lottery_service import buy_lottery,buy_loto,quick_pick,draw_lottery,draw_loto,lottery_user_overview,loto_user_overview,ensure_lottery_draw,ensure_loto_draw,latest_lottery_result,latest_loto_result
 
 GOLD=0xF1C40F
 DARK=0x2B2D31
@@ -115,6 +115,14 @@ class LotoLaunchView(discord.ui.View):
         text="\n".join(f"`#{r['ticket_id']}` 第{r['draw_no']}回 **{' / '.join(map(str,r['numbers']))}**｜{r['rank'] or ('抽選待ち' if r['draw_status']=='OPEN' else 'はずれ')}"+(f"｜{r['prize']:,} CHIP" if r['prize'] else "") for r in rows)
         await i.response.send_message(embed=emb("🔢 MY LOTO6",f"次回抽選 **{jst_time(d['draw_at'])} JST**\nキャリー **{d['carryover']:,} CHIP**\n\n{text or '購入券なし'}",GOLD),ephemeral=True)
 
+    @discord.ui.button(label="🏆 最新抽選結果",style=discord.ButtonStyle.primary,custom_id="casino_loto_result")
+    async def result(self,i,b):
+        r=await latest_loto_result()
+        if not r:await i.response.send_message("まだ抽選結果はありません。",ephemeral=True);return
+        nums=" / ".join(map(str,r["winning_numbers"] or []))
+        text=f"**第{r['draw_no']}回**\n\n🎯 本数字\n## {nums}\n\nBONUS **{r['bonus_number']}**\n\n次回繰越 **{r['carryover']:,} CHIP**"
+        await i.response.send_message(embed=emb("🔢 ロト6｜最新抽選結果",text,GOLD),ephemeral=True)
+
 class LotteryLaunchView(discord.ui.View):
     def __init__(self):super().__init__(timeout=None)
     @discord.ui.button(label="🎫 宝くじを購入",style=discord.ButtonStyle.success,custom_id="casino_lottery_buy")
@@ -125,6 +133,13 @@ class LotteryLaunchView(discord.ui.View):
         text="\n".join(f"`#{r['ticket_id']}` 第{r['draw_no']}回 **{r['ticket_group']:02d}組 {r['ticket_number']:06d}番**｜{r['rank'] or ('抽選待ち' if r['draw_status']=='OPEN' else 'はずれ')}"+(f"｜{r['prize']:,} CHIP" if r['prize'] else "") for r in rows)
         await i.response.send_message(embed=emb("🎫 MY LOTTERY",f"次回抽選 **{jst_time(d['draw_at'])} JST**\n\n{text or '購入券なし'}",GOLD),ephemeral=True)
 
+
+    @discord.ui.button(label="🏆 最新抽選結果",style=discord.ButtonStyle.primary,custom_id="casino_lottery_result")
+    async def result(self,i,b):
+        r=await latest_lottery_result()
+        if not r:await i.response.send_message("まだ抽選結果はありません。",ephemeral=True);return
+        text=f"**第{r['draw_no']}回**\n\n🎯 当選番号\n## {r['winning_group']:02d}組 {r['winning_number']:06d}番"
+        await i.response.send_message(embed=emb("🎊 宝くじ｜最新抽選結果",text,GOLD),ephemeral=True)
 
 class BetModal(discord.ui.Modal):
     bet=discord.ui.TextInput(label="BET CHIP",placeholder="100～10,000",max_length=10)
@@ -416,16 +431,25 @@ class DirectGamePanel(discord.ui.View):
         b=discord.ui.Button(label="🎮 プレイ",style=discord.ButtonStyle.success,custom_id=f"casino_direct_{key.lower()}")
         b.callback=self.play;self.add_item(b)
     async def play(self,i):
-        if self.key=="SLOT3":await i.response.send_modal(SlotBetModal())
-        elif self.key=="SCRATCH":await i.response.send_message("🎟️ 500 CHIP固定",view=ScratchView(),ephemeral=True)
-        elif self.key=="ROULETTE":await i.response.send_message("🎡 賭け方を選択",view=RouletteView(),ephemeral=True)
-        elif self.key=="COIN":await i.response.send_message("🪙 表 / 裏を選択",view=CoinView(),ephemeral=True)
-        elif self.key=="CHOHAN":await i.response.send_modal(ChohanBetModal())
-        elif self.key=="CHINCHIRO":await i.response.send_modal(ChinchiroModal())
-        elif self.key=="CRASH":await i.response.send_modal(CrashBetModal())
-        elif self.key=="BLACKJACK":await i.response.send_modal(BlackjackBetModal())
-        elif self.key=="MINES":await i.response.send_modal(MinesBetModal())
-        elif self.key=="HIGHLOW":await i.response.send_modal(HighlowBetModal())
+        try:
+            cfg=await game(self.key)
+            if not cfg or not cfg["implemented"] or not cfg["enabled"]:
+                await i.response.send_message("🔴 このゲームは現在休止中です。",ephemeral=True);return
+            if self.key=="SLOT3":await i.response.send_modal(SlotBetModal())
+            elif self.key=="SCRATCH":await i.response.send_message("🎟️ **500 CHIP固定**\n\n下のボタンで削ります。",view=ScratchView(),ephemeral=True)
+            elif self.key=="ROULETTE":await i.response.send_message("🎡 **賭け方を選択**",view=RouletteView(),ephemeral=True)
+            elif self.key=="COIN":await i.response.send_message("🪙 **表 / 裏を選択**",view=CoinView(),ephemeral=True)
+            elif self.key=="CHOHAN":await i.response.send_modal(ChohanBetModal())
+            elif self.key=="CHINCHIRO":await i.response.send_modal(ChinchiroModal())
+            elif self.key=="CRASH":await i.response.send_modal(CrashBetModal())
+            elif self.key=="BLACKJACK":await i.response.send_modal(BlackjackBetModal())
+            elif self.key=="MINES":await i.response.send_modal(MinesBetModal())
+            elif self.key=="HIGHLOW":await i.response.send_modal(HighlowBetModal())
+        except Exception as ex:
+            msg=f"ゲーム起動エラー: `{type(ex).__name__}`\n`{str(ex)[:800]}`"
+            if i.response.is_done():await i.followup.send(msg,ephemeral=True)
+            else:await i.response.send_message(msg,ephemeral=True)
+
 class DailyPanel(discord.ui.View):
     def __init__(self):
         super().__init__(timeout=None)
@@ -469,9 +493,9 @@ class DailyPanel(discord.ui.View):
                 cid=await pool().fetchval("SELECT channel_id FROM casino.channel_map WHERE map_key='big_win'")
                 ch=i.guild.get_channel(int(cid)) if cid else None
                 if ch:
-                    await ch.send(embed=emb("🎁🔥 DAILY GACHA RARE RESULT 🔥🎁",f"{i.user.mention}\\n\\n**{reward:+,} CHIP**\\n確率 **{'0.001%' if reward==100000 else '0.999%'}**",GOLD))
+                    await ch.send(embed=emb("🎁🔥 DAILY GACHA RARE RESULT 🔥🎁",f"{i.user.mention}\n\n**{reward:+,} CHIP**\n確率 **{'0.001%' if reward==100000 else '0.999%'}**",GOLD))
         except Exception as ex:
-            await i.edit_original_response(content=f"ガチャエラー: `{type(ex).__name__}`\\n`{str(ex)[:800]}`")
+            await i.edit_original_response(content=f"ガチャエラー: `{type(ex).__name__}`\n`{str(ex)[:800]}`")
 
 
 class GameSelect(discord.ui.Select):
@@ -608,7 +632,11 @@ class CasinoPanelView(discord.ui.View):
 class AdminGameSelect(discord.ui.Select):
     def __init__(self,rows):super().__init__(placeholder="ゲームON / OFF",options=[discord.SelectOption(label=r["display_name"],value=r["game_key"],description="ON" if r["enabled"] else "OFF") for r in rows[:25]])
     async def callback(self,i):
-        cfg=await game(self.values[0]);new=not cfg["enabled"];await pool().execute("UPDATE casino.games SET enabled=$1 WHERE game_key=$2",new,self.values[0]);await i.response.edit_message(content=f"{cfg['display_name']} → {'🟢 ON' if new else '⚫ OFF'}",view=None)
+        cfg=await game(self.values[0]);new=not cfg["enabled"]
+        await pool().execute("UPDATE casino.games SET enabled=$1 WHERE game_key=$2",new,self.values[0])
+        from setup_service import refresh_status_panel
+        await refresh_status_panel(i.guild)
+        await i.response.edit_message(content=f"{cfg['display_name']} → {'🟢 営業中' if new else '🔴 休止中'}\n\n📢 営業案内も更新しました。",view=None)
 class AdminGameView(discord.ui.View):
     def __init__(self,rows):super().__init__(timeout=120);self.add_item(AdminGameSelect(rows))
 
@@ -661,7 +689,7 @@ class RTPModal(discord.ui.Modal,title="📈 CASINO全体還元率"):
             if not 1<=val<=200:raise ValueError("1～200")
             old=await setting("target_rtp","95.00");await set_setting("target_rtp",f"{val:.2f}");await audit_global(i.user.id,"target_rtp",old,f"{val:.2f}")
             cid=await pool().fetchval("SELECT channel_id FROM casino.channel_map WHERE map_key='log'");ch=i.guild.get_channel(int(cid)) if cid else None
-            if ch:await ch.send(embed=emb("📈 CASINO RTP UPDATED",f"管理者 {i.user.mention}\\n目標RTP **{old}% → {val:.2f}%**\\n対象: 通常CASINOゲーム",GOLD))
+            if ch:await ch.send(embed=emb("📈 CASINO RTP UPDATED",f"管理者 {i.user.mention}\n目標RTP **{old}% → {val:.2f}%**\n対象: 通常CASINOゲーム",GOLD))
             await i.edit_original_response(content=f"✅ 全体目標還元率を **{val:.2f}%** に変更しました。")
         except Exception as ex:await i.edit_original_response(content=f"RTP設定エラー: `{str(ex)[:500]}`")
 
@@ -672,15 +700,29 @@ class SystemView(discord.ui.View):
     @discord.ui.button(label="📊 実測RTP",style=discord.ButtonStyle.secondary)
     async def actual(self,i,b):
         s=await total_stats();actual=(float(s["payouts"])/float(s["bets"])*100) if s["bets"] else 0
-        await i.response.send_message(f"🎯 目標RTP **{await setting('target_rtp','95.00')}%**\\n📊 実測RTP **{actual:.2f}%**\\n💰 BET {s['bets']:,} / 配当 {s['payouts']:,} CHIP",ephemeral=True)
+        await i.response.send_message(f"🎯 目標RTP **{await setting('target_rtp','95.00')}%**\n📊 実測RTP **{actual:.2f}%**\n💰 BET {s['bets']:,} / 配当 {s['payouts']:,} CHIP",ephemeral=True)
     @discord.ui.button(label="🎫 宝くじ抽選",style=discord.ButtonStyle.danger)
     async def lottery_draw(self,i,b):
-        await i.response.defer(ephemeral=True,thinking=True);r=await draw_lottery()
-        await i.edit_original_response(content=f"🎊 第{r['draw_no']}回 宝くじ抽選\\n**{r['group']:02d}組 {r['number']:06d}番**\\n当選処理 {len(r['winners'])}件")
+        await i.response.defer(ephemeral=True,thinking=True)
+        try:
+            r=await draw_lottery();await ensure_lottery_draw()
+            cid=await pool().fetchval("SELECT channel_id FROM casino.channel_map WHERE map_key='status'")
+            ch=i.guild.get_channel(int(cid)) if cid else None
+            text=f"**第{r['draw_no']}回**\n\n🎯 当選番号\n## {r['group']:02d}組 {r['number']:06d}番\n\n当選券 **{len(r['winners'])}件**"
+            if ch:await ch.send(embed=emb("🎊 PAL CASINO｜宝くじ抽選結果",text+"\n\n🏆 自分の結果は宝くじチャンネルから確認できます。",GOLD))
+            await i.edit_original_response(content=f"🎊 第{r['draw_no']}回 宝くじ抽選完了\n\n**{r['group']:02d}組 {r['number']:06d}番**")
+        except Exception as ex:await i.edit_original_response(content=f"宝くじ抽選エラー: `{type(ex).__name__}`\n`{str(ex)[:800]}`")
     @discord.ui.button(label="🔢 ロト6抽選",style=discord.ButtonStyle.danger)
     async def loto_draw(self,i,b):
-        await i.response.defer(ephemeral=True,thinking=True);r=await draw_loto()
-        await i.edit_original_response(content=f"🔢 第{r['draw_no']}回 ロト6抽選\\n本数字 **{' / '.join(map(str,r['winning']))}**\\nBONUS **{r['bonus']}**\\n次回繰越 **{r['carryover']:,} CHIP**")
+        await i.response.defer(ephemeral=True,thinking=True)
+        try:
+            r=await draw_loto();await ensure_loto_draw();nums=" / ".join(map(str,r["winning"]))
+            cid=await pool().fetchval("SELECT channel_id FROM casino.channel_map WHERE map_key='status'")
+            ch=i.guild.get_channel(int(cid)) if cid else None
+            text=f"**第{r['draw_no']}回**\n\n🎯 本数字\n## {nums}\n\nBONUS **{r['bonus']}**\n\n次回繰越 **{r['carryover']:,} CHIP**"
+            if ch:await ch.send(embed=emb("🔢 PAL CASINO｜ロト6抽選結果",text+"\n\n🏆 自分の結果はロト6チャンネルから確認できます。",GOLD))
+            await i.edit_original_response(content=f"🔢 第{r['draw_no']}回 ロト6抽選完了\n\n本数字 **{nums}**\nBONUS **{r['bonus']}**")
+        except Exception as ex:await i.edit_original_response(content=f"ロト6抽選エラー: `{type(ex).__name__}`\n`{str(ex)[:800]}`")
 
 class AdminUserModal(discord.ui.Modal,title="👤 CASINOユーザー確認"):
     user_id=discord.ui.TextInput(label="Discord User ID",placeholder="123456789012345678",max_length=25)
@@ -736,12 +778,16 @@ class CasinoAdminView(discord.ui.View):
     async def gm(self,i,b):await i.response.send_message("ゲーム営業管理",view=AdminGameView(await games()),ephemeral=True)
     @discord.ui.button(label="🟢 全ゲーム営業",style=discord.ButtonStyle.success,custom_id="casino_admin_all_games_on",row=3)
     async def all_games_on(self,i,b):
-        await pool().execute("UPDATE casino.games SET enabled=TRUE")
-        await i.response.send_message("🟢 **全ゲーム営業開始！**\nすべてのCASINOゲームを一括でONにしました。",ephemeral=True)
+        await pool().execute("UPDATE casino.games SET enabled=TRUE WHERE implemented=TRUE")
+        from setup_service import refresh_status_panel
+        await refresh_status_panel(i.guild)
+        await i.response.send_message("🟢 **全ゲーム営業開始！**\n\n📢 営業案内も更新しました。",ephemeral=True)
     @discord.ui.button(label="🔴 全ゲーム休止",style=discord.ButtonStyle.danger,custom_id="casino_admin_all_games_off",row=3)
     async def all_games_off(self,i,b):
         await pool().execute("UPDATE casino.games SET enabled=FALSE")
-        await i.response.send_message("🔴 **全ゲーム休止！**\nすべてのCASINOゲームを一括でOFFにしました。",ephemeral=True)
+        from setup_service import refresh_status_panel
+        await refresh_status_panel(i.guild)
+        await i.response.send_message("🔴 **全ゲーム休止！**\n\n📢 営業案内も更新しました。",ephemeral=True)
     @discord.ui.button(label="⚙️ ゲーム設定",style=discord.ButtonStyle.secondary,custom_id="casino_admin_settings",row=0)
     async def gs(self,i,b):await i.response.send_message("⚙️ 詳細設定するゲームを選択してください。",view=SettingsView(await games()),ephemeral=True)
     @discord.ui.button(label="👤 ユーザー確認",style=discord.ButtonStyle.secondary,custom_id="casino_admin_user",row=0)

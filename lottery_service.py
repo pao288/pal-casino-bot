@@ -30,6 +30,7 @@ async def buy_lottery(uid,count):
                 tid=await c.fetchval("""INSERT INTO casino.lottery_tickets(draw_id,user_id,ticket_group,ticket_number,price)
                   VALUES($1,$2,$3,$4,$5) RETURNING ticket_id""",draw["draw_id"],str(uid),g,n,price)
                 tickets.append((tid,g,n))
+            await c.execute("UPDATE casino.lottery_draws SET sales=sales+$1 WHERE draw_id=$2",cost,draw["draw_id"])
     return {"status":"SUCCESS","draw_no":draw["draw_no"],"cost":cost,"tickets":tickets}
 
 def lottery_rank(g,n,wg,wn):
@@ -120,3 +121,9 @@ async def loto_user_overview(uid, limit=20):
       FROM casino.loto_tickets t JOIN casino.loto_draws d ON d.draw_id=t.draw_id
       WHERE t.user_id=$1 ORDER BY t.purchased_at DESC LIMIT $2""",str(uid),limit)
     return {"draw":draw,"tickets":tickets}
+
+async def latest_lottery_result():
+    return await pool().fetchrow("SELECT * FROM casino.lottery_draws WHERE status='DRAWN' ORDER BY draw_no DESC LIMIT 1")
+
+async def latest_loto_result():
+    return await pool().fetchrow("SELECT * FROM casino.loto_draws WHERE status='DRAWN' ORDER BY draw_no DESC LIMIT 1")

@@ -92,6 +92,7 @@ async def init_db():
         );
         CREATE INDEX IF NOT EXISTS loto_ticket_user_idx ON casino.loto_tickets(user_id,purchased_at DESC);
         """)
+        await c.execute("ALTER TABLE casino.lottery_draws ADD COLUMN IF NOT EXISTS sales bigint NOT NULL DEFAULT 0")
         defaults = {
           "big_win_enabled":"1","big_win_multiplier":"30",
           "daily_bonus":"500","casino_maintenance":"0",
@@ -106,6 +107,10 @@ async def init_db():
             await c.execute("""INSERT INTO casino.games(game_key,display_name,enabled,implemented,vip_only)
               VALUES($1,$2,$3,$3,$4) ON CONFLICT(game_key) DO UPDATE SET display_name=EXCLUDED.display_name,
               implemented=EXCLUDED.implemented,vip_only=EXCLUDED.vip_only""",key,name,implemented,vip)
+        # V8: completed initial games are brought online after the V7 PREPARING issue.
+        await c.execute("""UPDATE casino.games SET implemented=TRUE
+          WHERE game_key = ANY($1::text[])""",
+          ["SLOT3","SCRATCH","LOTTERY","LOTO6","BLACKJACK","ROULETTE","MINES","CHINCHIRO","CHOHAN","COIN","HIGHLOW","CRASH"])
 
 def pool():
     if _pool is None: raise RuntimeError("init_db first")

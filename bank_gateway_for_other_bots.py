@@ -15,7 +15,10 @@ async def bank_move(source_bot, reference_id, operation, user_id, currency, amou
         maintenance=await c.fetchval("SELECT setting_value FROM bank.settings WHERE setting_key='maintenance_mode'")
         if maintenance=="1": return {"status":"MAINTENANCE"}
         old=await c.fetchval("SELECT status FROM bank.integration_events WHERE source_bot=$1 AND external_reference_id=$2 FOR UPDATE",source_bot,reference_id)
-        if old:return {"status":"ALREADY_PROCESSED","event_status":old}
+        if old:
+            if old=="COMPLETED":return {"status":"SUCCESS","already_processed":True}
+            if old=="PENDING":return {"status":"PENDING"}
+            return {"status":"FAILED"}
         await c.execute("INSERT INTO bank.integration_events(source_bot,external_reference_id,operation,user_id,currency,amount,status) VALUES($1,$2,$3,$4,$5,$6,'PENDING')",source_bot,reference_id,operation,str(user_id),currency,amount)
         await c.execute("INSERT INTO bank.accounts(account_type,owner_id,currency,balance) VALUES('USER',$1,$2,0) ON CONFLICT DO NOTHING",str(user_id),currency)
         aid=await c.fetchval("SELECT account_id FROM bank.accounts WHERE account_type='USER' AND owner_id=$1 AND currency=$2",str(user_id),currency)
