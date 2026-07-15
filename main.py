@@ -2,7 +2,7 @@ import os, logging, discord
 from discord.ext import commands
 from casino_db import init_db
 from bank_gateway_for_other_bots import init_bank_gateway
-from views import CasinoPanelView,CasinoAdminView
+from views import CasinoPanelView, CasinoAdminView, DirectGamePanel, DailyPanel, LotteryLaunchView, LotoLaunchView
 from setup_service import install_panels,ensure_structure,delete_structure, install_direct_game_panels
 
 logging.basicConfig(level=logging.INFO)
