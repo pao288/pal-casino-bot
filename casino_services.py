@@ -6,6 +6,15 @@ SYMBOLS=["🍒","🍋","💎","7️⃣"]
 WEIGHTS=[45,35,15,5]
 RED={1,3,5,7,9,12,14,16,18,19,21,23,25,27,30,32,34,36}
 
+# 丁半博打のNPCセリフ。実際の出目(rolled)とは無関係に均等抽選する（丁寄り2種／半寄り2種／中立2種／わからない2種）。
+# セリフから出目を読み取ることはできない。
+CHOHAN_HINTS=[
+    "奇の気配がするな……","片方だけ妙に跳ねたな。",
+    "揃った空気を感じるな……","二つの目が妙に落ち着いてる。",
+    "さて、この出目をどう読む？","壺の中は静かなものだ。",
+    "丁か半か、皆目見当がつかん……","こればかりは五分と五分だな。",
+]
+
 def round_id(game_key):
     return f"CASINO-{game_key}-{secrets.token_hex(5).upper()}"
 
@@ -187,12 +196,10 @@ async def start_chohan(user_id,bet):
                 "npc":"……おい。サイコロが、ないぞ。"}
     dice=[random.randint(1,6),random.randint(1,6)]
     rolled="丁" if sum(dice)%2==0 else "半"
-    # Result hint only; choice happens after this line is shown.
-    if rolled=="丁":
-        hints=["奇の気配がするな……","片方だけ妙に跳ねたな。","さて、この出目をどう読む？"]
-    else:
-        hints=["揃った空気を感じるな……","二つの目が妙に落ち着いてる。","静かな出目だ。どう張る？"]
-    return {**r,"dice":dice,"rolled":rolled,"npc":random.choice(hints),"special":None}
+    # NPCのセリフは実際の出目(rolled)と完全に無関係に選ぶ（丁寄り/半寄り/中立/わからない、を均等に混ぜる）。
+    # そのため外れることもあれば、何も手がかりが無いこともある。プレイヤーがセリフから出目を読むことはできない。
+    npc=random.choice(CHOHAN_HINTS)
+    return {**r,"dice":dice,"rolled":rolled,"npc":npc,"special":None}
 
 async def finish_chohan(user_id,state,choice):
     rid=state["round_id"];bet=state["bet"]
@@ -231,6 +238,14 @@ async def start_highlow(user_id,bet):
     r=await reserve_bet(user_id,"HIGHLOW",bet)
     if r["status"]!="SUCCESS":return r
     return {**r,"current":random.randint(1,13),"stage":1,"multiplier":1}
+
+def highlow_fair_multiplier(current):
+    """現在のカード(1～13)を基準に、有利な方（HIGH/LOW）を選んだ場合の公正な倍率(1/勝率)を返す。
+    真ん中の7は五分五分なので×2。1や13など端に近いカードほど勝ちやすい代わりに配当は控えめになる。
+    これにより「見えているカードで有利な方を選べば毎回×2」という不公平な期待値のズレを無くす。"""
+    higher=13-current; lower=current-1
+    p=max(higher,lower)/12.0
+    return round(1.0/p,4) if p>0 else 2.0
 
 async def highlow_step(state,choice,double=False):
     current=state["current"]; nxt=random.randint(1,13)
