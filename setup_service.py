@@ -108,14 +108,22 @@ async def install_direct_game_panels(guild,category=None):
     lottery=chs["lottery"]
     await _clear_bot_messages(lottery,guild)
     await lottery.send(
-        embed=emb("🎫 PAL 宝くじ","1枚 **500 CHIP**\n\n**どんなゲーム？**\n購入すると「組」と「6桁番号」が発行され、抽選番号との一致で等級が決まります。\n**01～100組 / 100000～199999番**\n1等 **1,000,000,000 CHIP**\n購入後は **📖 マイ宝くじ** から券・当選結果・次回抽選を確認できます。",GOLD),
+        embed=emb("🎫 PAL 宝くじ",
+            "1枚 **500 CHIP**\n\n**どんなゲーム？**\n購入すると「組」と「6桁番号」が発行され、抽選番号との一致で等級が決まります。\n**01～100組 / 100000～199999番**\n\n"
+            "**配当**\n1等（組・番号完全一致）：**1,000,000,000 CHIP**\n1等前後賞（組一致・番号±1）：**200,000,000 CHIP**\n2等（番号完全一致）：**50,000,000 CHIP**\n"
+            "3等（下5桁一致）：**5,000,000 CHIP**\n4等（下4桁一致）：**500,000 CHIP**\n5等（下3桁一致）：**50,000 CHIP**\n6等（下2桁一致）：**5,000 CHIP**\n7等（下1桁一致）：**500 CHIP**\n\n"
+            "購入後は **📖 マイ宝くじ** から券・当選結果・次回抽選を確認できます。",GOLD),
         view=LotteryLaunchView()
     )
 
     loto=chs["loto6"]
     await _clear_bot_messages(loto,guild)
     await loto.send(
-        embed=emb("🔢 ロト6","1口 **500 CHIP**\n\n**どんなゲーム？**\n1～43から異なる6数字を選び、抽選された本数字との一致数で当選が決まります。\n数字選択 / クイックピック\n購入後は **📖 マイロト6** から数字・当選結果・次回抽選・キャリーを確認できます。",GOLD),
+        embed=emb("🔢 ロト6",
+            "1口 **500 CHIP**\n\n**どんなゲーム？**\n1～43から異なる6数字を選び、抽選された本数字（6個）＋ボーナス数字との一致数で当選が決まります。\n数字選択 / クイックピック\n\n"
+            "**配当（売上に応じた山分け方式）**\n1等（6個一致）：売上の**55%＋前回繰越分**を山分け\n2等（5個一致＋ボーナス一致）：売上の**15%**を山分け\n3等（5個一致）：売上の**10%**を山分け\n"
+            "4等（4個一致）：売上の**5%**を山分け\n5等（3個一致）：固定 **500 CHIP**\n※該当者がいない等級の分は次回に繰り越されます\n\n"
+            "購入後は **📖 マイロト6** から数字・当選結果・次回抽選・繰越金額を確認できます。",GOLD),
         view=LotoLaunchView()
     )
     return chs
@@ -245,13 +253,16 @@ def _split_display_name(display_name):
 
 
 async def _build_game_rooms():
-    """GAMEカテゴリのチャンネル一覧を casino.games（ゲーム登録一覧）から動的に組み立てる。
+    """🎮GAMEカテゴリのチャンネル一覧を casino.games（ゲーム登録一覧）から動的に組み立てる。
     新しいゲームを casino.games に登録するだけで、このファイルを書き換えなくても専用チャンネルが自動生成される。
     未実装（implemented=FALSE）のゲームも「🚧準備中」チャンネルとして作成する。
+    vip_only=TRUEのゲーム（カザーン・競馬など）は🎮VIP GAME側に入るため、ここには含めない。
     戻り値: [(map_key, チャンネル名, ゲームキー, 実装済みか), ...]
     ※ GACHA（1日1回ガチャ）は casino.games に存在しない特別枠のため固定で追加する。"""
     rooms=[]
     for r in await games():
+        if r["vip_only"]:
+            continue
         key=r["game_key"]
         emoji,name=_split_display_name(r["display_name"])
         rooms.append((v2_room_map_key(key),f"{emoji}｜{name}",key,bool(r["implemented"])))
@@ -259,20 +270,36 @@ async def _build_game_rooms():
     return rooms
 
 
+async def _build_vip_game_rooms():
+    """🎮VIP GAMEカテゴリのチャンネル一覧を、casino.gamesのvip_only=TRUEなゲームから動的に組み立てる
+    （現在: カザーン・競馬）。未実装なら「🚧準備中」チャンネルとして作成する。
+    戻り値: [(map_key, チャンネル名, ゲームキー, 実装済みか), ...]"""
+    rooms=[]
+    for r in await games():
+        if not r["vip_only"]:
+            continue
+        key=r["game_key"]
+        emoji,name=_split_display_name(r["display_name"])
+        rooms.append((v2_room_map_key(key),f"{emoji}｜{name}",key,bool(r["implemented"])))
+    return rooms
+
+
 async def build_v2_status_embed(guild):
     """🟢｜営業状況 に表示する、カジノ全体・ゲームごとの営業中/休止中/準備中の一覧を作る。
-    📢｜アナウンスとは別チャンネルで、営業状況だけを常時確認できるようにするためのもの。"""
+    📢｜アナウンスとは別チャンネルで、営業状況だけを常時確認できるようにするためのもの。
+    vip_only=TRUEのゲーム（🎮VIP GAME側）には「👑VIP限定」を付けて区別する。"""
     rows=await games()
     lines=[]
     for r in rows:
         cid=await map_get(v2_room_map_key(r["game_key"]))
+        vip_tag="👑VIP限定｜" if r["vip_only"] else ""
         if not r["implemented"]:
-            line=f"🚧 準備中｜**{r['display_name']}**"
+            line=f"{vip_tag}🚧 準備中｜**{r['display_name']}**"
             if cid:line+=f"\n↳ <#{int(cid)}>"
             lines.append(line)
             continue
         is_open=bool(r["enabled"])
-        line=f"{'🟢 営業中' if is_open else '🔴 休止中'}｜**{r['display_name']}**"
+        line=f"{vip_tag}{'🟢 営業中' if is_open else '🔴 休止中'}｜**{r['display_name']}**"
         if is_open and cid:line+=f"\n↳ <#{int(cid)}>"
         lines.append(line)
     gacha_cid=await map_get(v2_room_map_key("GACHA"))
@@ -328,9 +355,8 @@ V2_VIP_GAME_CAT_KEY="v2_cat_vipgame"
 V2_VIP_CHANNELS=[
     ("v2_vip_room","💬｜VIPルーム","PAL CASINO｜VIP会員専用ラウンジ"),
 ]
-V2_VIP_GAME_CHANNELS=[
-    ("v2_vip_placeholder","🚧｜準備中","PAL CASINO｜VIP専用ゲームは現在準備中です"),
-]
+# vip_only=TRUEのゲームが1つも無い場合のフォールバック用（現状は使われない想定）
+V2_VIP_GAME_FALLBACK_CHANNEL=("v2_vip_placeholder","🚧｜準備中","PAL CASINO｜VIP専用ゲームは現在準備中です")
 
 
 def _vip_lounge_overwrites(guild,vip_role):
@@ -399,7 +425,8 @@ async def ensure_vip_role(guild):
 
 
 async def ensure_vip_structure(guild):
-    """👑VIP（VIPルーム）／🎮VIP GAME（準備中）を用意する。既存は再利用し、不足分のみ復旧する。"""
+    """👑VIP（VIPルーム）／🎮VIP GAME（カザーン・競馬などvip_only=TRUEのゲーム）を用意する。
+    既存は再利用し、不足分のみ復旧する。"""
     counts={"created":0,"restored":0,"reused":0}
     vip_role=await ensure_vip_role(guild)
     lounge_ow=_vip_lounge_overwrites(guild,vip_role)
@@ -411,14 +438,25 @@ async def ensure_vip_structure(guild):
     channels={}
     for map_key,name,topic in V2_VIP_CHANNELS:
         channels[map_key]=await _ensure_v2_channel(guild,vip_cat,name,topic,map_key,lounge_ow,counts)
-    for map_key,name,topic in V2_VIP_GAME_CHANNELS:
-        channels[map_key]=await _ensure_v2_channel(guild,vip_game_cat,name,topic,map_key,game_ow,counts)
+
+    vip_game_rooms=await _build_vip_game_rooms()
+    if not vip_game_rooms:
+        # vip_only=TRUEのゲームが1つも無い場合のみ、フォールバックの「準備中」チャンネルを使う
+        fk,fn,ft=V2_VIP_GAME_FALLBACK_CHANNEL
+        channels[fk]=await _ensure_v2_channel(guild,vip_game_cat,fn,ft,fk,game_ow,counts)
+    else:
+        for map_key,name,_game_key,implemented in vip_game_rooms:
+            topic=(f"PAL CASINO｜{name}（VIP限定）専用チャンネル（結果は📺｜プレイ結果に公開されます）"
+                   if implemented else f"PAL CASINO｜{name}（VIP限定）は準備中です")
+            channels[map_key]=await _ensure_v2_channel(guild,vip_game_cat,name,topic,map_key,game_ow,counts)
+        await _reorder_game_rooms(vip_game_cat,vip_game_rooms,channels)
 
     return vip_role,vip_cat,vip_game_cat,channels,counts
 
 
 async def install_vip_panels(channels):
-    """VIPルームの案内メッセージと、VIP GAMEの「準備中」案内を設置する。"""
+    """VIPルームの案内メッセージと、VIP GAME内の各VIP限定ゲーム（カザーン・競馬など）のパネルを設置する。
+    未実装のものは「🚧準備中」、実装済みになったものは通常ゲームと同じくDirectGamePanelを設置する。"""
     room=channels.get("v2_vip_room")
     if room:
         await _ensure_panel_message(
@@ -426,13 +464,35 @@ async def install_vip_panels(channels):
             emb("👑 VIPルームへようこそ","VIP会員限定のラウンジです。自由にご歓談ください。",GOLD),
             None,"v2_msg_viproom",
         )
-    placeholder=channels.get("v2_vip_placeholder")
-    if placeholder:
-        await _ensure_panel_message(
-            placeholder,
-            emb("🚧 VIP限定ゲーム 準備中","近日公開予定です。楽しみにお待ちください。",GOLD),
-            None,"v2_msg_vipgame",
-        )
+
+    vip_game_rooms=await _build_vip_game_rooms()
+    if not vip_game_rooms:
+        fk,_fn,_ft=V2_VIP_GAME_FALLBACK_CHANNEL
+        placeholder=channels.get(fk)
+        if placeholder:
+            await _ensure_panel_message(
+                placeholder,
+                emb("🚧 VIP限定ゲーム 準備中","近日公開予定です。楽しみにお待ちください。",GOLD),
+                None,"v2_msg_vipgame",
+            )
+        return
+
+    for map_key,name,game_key,implemented in vip_game_rooms:
+        ch=channels.get(map_key)
+        if not ch:continue
+        if not implemented:
+            await _ensure_panel_message(
+                ch,
+                emb(f"🚧 {name} 準備中",f"**{GAME_NAMES.get(game_key,name)}**（VIP限定）は近日公開予定です。楽しみにお待ちください。",GOLD),
+                None,f"v2_msg_{map_key}",
+            )
+        else:
+            title,desc=DIRECT_GAME_INFO.get(game_key,(GAME_NAMES.get(game_key,name),""))
+            await _ensure_panel_message(
+                ch,
+                emb(title,desc+"\n\n**遊び方**\n下の「🎮 プレイ」から開始。BETや選択は本人だけに表示されます。\n結果は 📺｜プレイ結果 に公開されます。",GOLD),
+                DirectGamePanel(game_key),f"v2_msg_{map_key}",
+            )
 
 
 async def _ensure_v2_category(guild,name,map_key,overwrites,counts):
@@ -483,6 +543,17 @@ async def _ensure_v2_channel(guild,category,name,topic,map_key,overwrites,counts
     return new_ch
 
 
+async def _reorder_game_rooms(category,room_defs,channels):
+    """カテゴリ内のゲームチャンネルを「実装済みが先頭、準備中(🚧)が最後」の順番に並べ替える。
+    room_defs: [(map_key, name, game_key, implemented), ...]（_build_game_rooms/_build_vip_game_roomsの戻り値）"""
+    ordered=sorted(room_defs,key=lambda r:(0 if r[3] else 1))
+    ordered_channels=[channels[mk] for mk,_n,_g,_i in ordered if mk in channels]
+    for idx,ch in enumerate(ordered_channels):
+        if ch.position!=idx:
+            try:await ch.edit(position=idx)
+            except discord.HTTPException:pass
+
+
 async def ensure_v2_structure(guild):
     """!casinosetup 本体。既存のカテゴリ／チャンネルは再利用し、不足分（削除されたもの）だけ復旧する。
     GAMEカテゴリのチャンネルは casino.games（ゲーム登録一覧）から動的に組み立てるため、
@@ -502,6 +573,7 @@ async def ensure_v2_structure(guild):
         topic=f"PAL CASINO｜{name} 専用チャンネル（結果は📺｜プレイ結果に公開されます）" if implemented else f"PAL CASINO｜{name} は準備中です"
         channels[map_key]=await _ensure_v2_channel(guild,game_cat,name,topic,map_key,overwrites,counts)
     counts["game_channels"]=len(game_rooms)
+    await _reorder_game_rooms(game_cat,game_rooms,channels)
 
     # VIP専用エリア（👑VIP／🎮VIP GAME）も合わせて用意する（不足していれば新規作成、既存は再利用）。
     vip_role,_vip_cat,_vip_game_cat,vip_channels,vip_counts=await ensure_vip_structure(guild)
@@ -523,7 +595,13 @@ async def get_v2_channels(guild):
         cid=await map_get(map_key)
         ch=guild.get_channel(int(cid)) if cid else None
         if ch:channels[map_key]=ch
-    for map_key,_name,_topic in V2_VIP_CHANNELS+V2_VIP_GAME_CHANNELS:
+    for map_key,_name,_topic in V2_VIP_CHANNELS:
+        cid=await map_get(map_key)
+        ch=guild.get_channel(int(cid)) if cid else None
+        if ch:channels[map_key]=ch
+    vip_game_rooms=await _build_vip_game_rooms()
+    vip_game_keys=[k for k,_n,_g,_i in vip_game_rooms] or [V2_VIP_GAME_FALLBACK_CHANNEL[0]]
+    for map_key in vip_game_keys:
         cid=await map_get(map_key)
         ch=guild.get_channel(int(cid)) if cid else None
         if ch:channels[map_key]=ch
@@ -588,13 +666,21 @@ async def install_v2_panels(guild,channels):
         elif game_key=="LOTTERY":
             await _ensure_panel_message(
                 ch,
-                emb("🎫 PAL 宝くじ","1枚 **500 CHIP**\n\n**どんなゲーム？**\n購入すると「組」と「6桁番号」が発行され、抽選番号との一致で等級が決まります。\n**01～100組 / 100000～199999番**\n1等 **1,000,000,000 CHIP**\n抽選結果は 📢｜アナウンス で告知されます。",GOLD),
+                emb("🎫 PAL 宝くじ",
+                    "1枚 **500 CHIP**\n\n**どんなゲーム？**\n購入すると「組」と「6桁番号」が発行され、抽選番号との一致で等級が決まります。\n**01～100組 / 100000～199999番**\n\n"
+                    "**配当**\n1等（組・番号完全一致）：**1,000,000,000 CHIP**\n1等前後賞（組一致・番号±1）：**200,000,000 CHIP**\n2等（番号完全一致）：**50,000,000 CHIP**\n"
+                    "3等（下5桁一致）：**5,000,000 CHIP**\n4等（下4桁一致）：**500,000 CHIP**\n5等（下3桁一致）：**50,000 CHIP**\n6等（下2桁一致）：**5,000 CHIP**\n7等（下1桁一致）：**500 CHIP**\n\n"
+                    "抽選結果は 📢｜アナウンス で告知されます。",GOLD),
                 LotteryLaunchView(),f"v2_msg_{map_key}",
             )
         elif game_key=="LOTO6":
             await _ensure_panel_message(
                 ch,
-                emb("🔢 ロト6","1口 **500 CHIP**\n\n**どんなゲーム？**\n1～43から異なる6数字を選び、抽選された本数字との一致数で当選が決まります。\n数字選択 / クイックピック\n抽選結果は 📢｜アナウンス で告知されます。",GOLD),
+                emb("🔢 ロト6",
+                    "1口 **500 CHIP**\n\n**どんなゲーム？**\n1～43から異なる6数字を選び、抽選された本数字（6個）＋ボーナス数字との一致数で当選が決まります。\n数字選択 / クイックピック\n\n"
+                    "**配当（売上に応じた山分け方式）**\n1等（6個一致）：売上の**55%＋前回繰越分**を山分け\n2等（5個一致＋ボーナス一致）：売上の**15%**を山分け\n3等（5個一致）：売上の**10%**を山分け\n"
+                    "4等（4個一致）：売上の**5%**を山分け\n5等（3個一致）：固定 **500 CHIP**\n※該当者がいない等級の分は次回に繰り越されます\n\n"
+                    "抽選結果は 📢｜アナウンス で告知されます。",GOLD),
                 LotoLaunchView(),f"v2_msg_{map_key}",
             )
         else:
@@ -616,11 +702,12 @@ async def delete_v2_structure(guild):
     ※「👑 VIP」ロール自体もあえて削除しない（削除するとVIP会員の見た目上の印が消えてしまうため）。
       次回 !casinosetup 実行時に、DB上VIPの全員へロールが自動で再同期される。"""
     deleted=[]
+    vip_game_keys=[k for k,_n,_g,_i in await _build_vip_game_rooms()] or [V2_VIP_GAME_FALLBACK_CHANNEL[0]]
     channel_keys=(
         [k for k,_n,_t in V2_MAIN_CHANNELS]
         + [k for k,_n,_g,_i in await _build_game_rooms()]
         + [k for k,_n,_t in V2_VIP_CHANNELS]
-        + [k for k,_n,_t in V2_VIP_GAME_CHANNELS]
+        + vip_game_keys
     )
     for map_key in channel_keys:
         cid=await map_get(map_key)

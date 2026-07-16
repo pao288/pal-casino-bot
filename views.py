@@ -1,6 +1,6 @@
 import discord, asyncio
 from casino_db import games,game,profile,history,ranking_chip,ranking_maxwin,total_stats,setting,set_setting,chip_balance,pool,config_get,config_set,audit_global,game_stats,map_get
-from casino_services import play_slot,play_coin,play_roulette,play_scratch,start_scratch,finish_scratch,play_chinchiro,start_chohan,finish_chohan,start_highlow,highlow_step,highlow_fair_multiplier,finish_highlow,create_crash,finish_crash,start_mines,mines_open,finish_mines,start_blackjack,blackjack_hit,finish_blackjack
+from casino_services import play_slot,play_coin,play_roulette,play_scratch,start_scratch,finish_scratch,play_chinchiro,start_chohan,finish_chohan,start_highlow,highlow_step,highlow_multiplier_for,finish_highlow,create_crash,finish_crash,start_mines,mines_open,finish_mines,start_blackjack,blackjack_hit,finish_blackjack
 from lottery_service import buy_lottery,buy_loto,quick_pick,draw_lottery,draw_loto,lottery_user_overview,loto_user_overview,ensure_lottery_draw,ensure_loto_draw,latest_lottery_result,latest_loto_result,JST
 
 GOLD=0xF1C40F
@@ -671,7 +671,15 @@ def highlow_embed(s):
     joker_mode=s.get("multiplier",1)>1
     title="🃏 HIGH & LOW｜ジョーカーモード" if joker_mode else "📈 HIGH & LOW"
     color=0x9B59B6 if joker_mode else GOLD
-    desc=("🃏 山札にジョーカーが紛れ込んでいます……\n\n" if joker_mode else "")+f"現在カード **{s['current']}**\n現在倍率 **×{s['multiplier']:.2f}**\n\nHIGH / LOW を選択{highlow_joker_hint(s)}"
+    cur=s["current"]
+    hi=highlow_multiplier_for(cur,"HIGH");lo=highlow_multiplier_for(cur,"LOW")
+    hi_txt=f"×{hi:.2f}" if hi else "―（出目なし）"
+    lo_txt=f"×{lo:.2f}" if lo else "―（出目なし）"
+    desc=("🃏 山札にジョーカーが紛れ込んでいます……\n\n" if joker_mode else "")+(
+        f"現在カード **{cur}**\n現在倍率 **×{s['multiplier']:.2f}**\n\n"
+        f"📈 HIGH（{cur}より大きい）: **{hi_txt}**\n📉 LOW（{cur}より小さい）: **{lo_txt}**\n\n"
+        f"HIGH / LOW を選択{highlow_joker_hint(s)}"
+    )
     return emb(title,desc,color)
 def highlow_win_embed(s):
     # 勝利直後、次に進む前に「ダブルアップ」か「降りる」かを明示的に選ばせるための画面。
@@ -699,9 +707,9 @@ class HighlowView(discord.ui.View):
         if x.get("push"):
             # 引き分け（同じカード）は倍率据え置きでもう一度選択させる
             await i.response.edit_message(embed=highlow_embed(self.state),view=self);return
-        # 勝利：倍率は「そのカードで有利な方を選んだ場合の公正倍率」を掛ける。
-        # 真ん中(7)は従来通り×2だが、端に近いカードほど勝ちやすい代わりに配当は控えめになる。
-        step_mult=highlow_fair_multiplier(prev_current)
+        # 勝利：倍率は「実際に選んだ方向(choice)で勝った場合の公正倍率」を掛ける。
+        # 真ん中(7)は従来通り×2。有利な方を選ぶほど倍率は低く、あえて不利な方を選んで勝てば高倍率になる。
+        step_mult=highlow_multiplier_for(prev_current,choice) or 2.0
         self.state["multiplier"]=round(min(10,self.state["multiplier"]*step_mult),4)
         await i.response.edit_message(embed=highlow_win_embed(self.state),view=HighlowDoubleUpPromptView(self.uid,self.state))
     @discord.ui.button(label="HIGH",style=discord.ButtonStyle.danger)
@@ -725,16 +733,41 @@ class HighlowDoubleUpPromptView(discord.ui.View):
         await i.response.defer();p=int(self.state["bet"]*self.state["multiplier"]);r=await finish_highlow(i.user.id,self.state,p,"CASHOUT",{"current":self.state["current"]});await public_result(i,r,"HIGHLOW")
 
 DIRECT_GAME_INFO={
-"SLOT3":("🎰 3リールスロット","3つのリールを回し、揃った絵柄で配当が決まるゲーム。BET後はリール演出が流れます。"),
-"SCRATCH":("🎟️ スクラッチ","500 CHIP固定。スクラッチを削って当たりを狙うシンプルなゲーム。"),
-"BLACKJACK":("🃏 ブラックジャック","カード合計を21に近づけてディーラーと勝負。HIT・STAND・SURRENDERを選べます。"),
-"ROULETTE":("🎡 ヨーロピアンルーレット","0～36の出目を予想。数字・色・奇偶・範囲・ダズン・カラムにBETできます。"),
-"MINES":("💣 マインズ","6×6の盤面から安全マスを開くゲーム。開けるほど倍率上昇、好きな時に換金できます。"),
-"CHINCHIRO":("🎲 チンチロ","3つのサイコロでNPCの親と役・出目を競うゲーム。"),
-"CHOHAN":("🎴 丁半博打","BET後にサイコロとNPCのセリフを確認し、合計が偶数の丁か奇数の半かを張るゲーム。"),
-"COIN":("🪙 コイントス","表か裏を選んでコイン勝負。特殊な大量コイン演出が発生することもあります。"),
-"HIGHLOW":("📈 ハイアンドロー","次のカードがHIGHかLOWかを予想。勝つほど倍率が上がり、途中換金できます。ダブルアップ中、山札にはジョーカーが潜んでいます。"),
-"CRASH":("🚀 CRASH LIVE","リアルタイムで上がる倍率を見ながら、爆発前にCASH OUTするゲーム。"),
+"SLOT3":("🎰 3リールスロット",
+    "3つのリールを回し、絵柄を揃えて配当を狙うゲーム。\n\n"
+    "**配当**\n7️⃣7️⃣7️⃣：×50\n💎💎💎：×20\n🍒🍒🍒：×5\nその他ぞろ目（🍋🍋🍋など）：×3\n揃わなければハズレ"),
+"SCRATCH":("🎟️ スクラッチ",
+    "参加費 **500 CHIP固定**。9マスのうち指定枚数を削り、同じ絵柄を3つ揃えると当たり。\n\n"
+    "**配当**\n👑×3：特賞 ×100\n💎×3：1等 ×10\n⭐×3：2等 ×2\n🍒×3：3等 ×1（掛け金と同額）\n揃わなければハズレ"),
+"BLACKJACK":("🃏 ブラックジャック",
+    "カード合計を21に近づけてディーラーと勝負。HIT（引く）・STAND（勝負）・SURRENDER（降参）を選べます。\n\n"
+    "**配当**\n最初の2枚で21（ブラックジャック）：×2.5\n通常の勝利：×2\n引き分け（PUSH）：掛け金がそのまま戻る\nSURRENDER：掛け金の半分が戻る\n負け：×0"),
+"ROULETTE":("🎡 ヨーロピアンルーレット",
+    "0～36の出目を予想してBET。複数の賭け方から選べます。\n\n"
+    "**配当**\n数字1点賭け：×36\n赤／黒・奇数／偶数・1～18／19～36：×2\nダズン（12個区切り）・カラム（縦列）：×3\n\n0（緑）が出ると、数字1点賭け以外はすべてハズレになります。"),
+"MINES":("💣 マインズ",
+    "5×5マスの盤面。爆弾の数（1～24個）を指定してスタートし、安全なマスを開くたびに倍率が上昇していきます。\n\n"
+    "**配当**\n開けるほど倍率アップ（爆弾が多いほど上昇ペースも速い）\n好きなタイミングで換金OK\n爆弾を踏むと配当は×0"),
+"CHINCHIRO":("🎲 チンチロ",
+    "3つのサイコロでNPCの親と役を競うゲーム。\n\n"
+    "**役の強さ（強い順）**\nピンゾロ＞ゾロ目＞シゴロ＞目あり＞ヒフミ（役なし扱い）\n\n"
+    "**配当**\n勝ち：×2\n引き分け：掛け金がそのまま戻る\n負け：×0\n\nごく稀に「GOD」（大当たり ×100）や「ションベン」（没収）などの特殊演出もあります。"),
+"CHOHAN":("🎴 丁半博打",
+    "サイコロが振られた後、合計が偶数の「丁」か奇数の「半」かを予想して張るゲーム。\n\n"
+    "**配当**\n的中：×2\n外れ：×0\n\n"
+    "NPCのセリフは実際の出目とは無関係です。セリフから結果を読むことはできません。ごく稀に「サイコロなし」という特殊イベントが発生することもあります。"),
+"COIN":("🪙 コイントス",
+    "表か裏を選んでコイン勝負。\n\n"
+    "**配当**\n的中：×2\n外れ：×0\n\n"
+    "ごく稀に「100枚投げ」イベントが発生し、実際に出た表裏の枚数比率に応じた倍率（大きく増えることも減ることもある）になります。"),
+"HIGHLOW":("📈 ハイアンドロー",
+    "現在のカード（1～13）より、次のカードが大きい（HIGH）か小さい（LOW）かを予想します。\n\n"
+    "**配当**\n真ん中のカード（7）：×2\n端に近いカードほど当たりやすい代わりに倍率は控えめ\n※選択画面でHIGH/LOWそれぞれの倍率を確認できます\n\n"
+    "勝つたびに「🎲 ダブルアップ」か「💰 降りる（換金）」かを選べます。ダブルアップを重ねるとジョーカーが紛れ込むモードに突入し、大逆転や高額配当のチャンスもあります。"),
+"CRASH":("🚀 CRASH LIVE",
+    "リアルタイムで上昇していく倍率を見ながら、爆発（クラッシュ）する前にCASH OUTを狙うゲーム。\n\n"
+    "**配当**\nCASH OUTした時点の倍率がそのまま配当になる\nクラッシュ前に降りられなければ×0\n\n"
+    "ごく稀に特殊イベント（MOON／BLACK HOLE／BIG BANG）が発生することもあります。"),
 }
 
 class DirectGamePanel(discord.ui.View):

@@ -239,13 +239,14 @@ async def start_highlow(user_id,bet):
     if r["status"]!="SUCCESS":return r
     return {**r,"current":random.randint(1,13),"stage":1,"multiplier":1}
 
-def highlow_fair_multiplier(current):
-    """現在のカード(1～13)を基準に、有利な方（HIGH/LOW）を選んだ場合の公正な倍率(1/勝率)を返す。
-    真ん中の7は五分五分なので×2。1や13など端に近いカードほど勝ちやすい代わりに配当は控えめになる。
-    これにより「見えているカードで有利な方を選べば毎回×2」という不公平な期待値のズレを無くす。"""
-    higher=13-current; lower=current-1
-    p=max(higher,lower)/12.0
-    return round(1.0/p,4) if p>0 else 2.0
+def highlow_multiplier_for(current,direction):
+    """現在のカード(1～13)と選択方向('HIGH'/'LOW')から、その方向を選んだ場合の公正な倍率(1/勝率)を返す。
+    真ん中の7はHIGH/LOWどちらも×2。勝ち目が無い場合（例: current=13でHIGH）はNoneを返す。
+    以前は「有利な方を選んだ場合の倍率」を選択方向に関わらず一律で使っていたため、
+    不利な方を選んでも有利な方と同じ倍率になってしまう抜けがあった。これを修正している。"""
+    cnt=(13-current) if direction=="HIGH" else (current-1)
+    if cnt<=0:return None
+    return round(12.0/cnt,4)
 
 async def highlow_step(state,choice,double=False):
     current=state["current"]; nxt=random.randint(1,13)
