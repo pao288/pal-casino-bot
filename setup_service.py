@@ -231,7 +231,7 @@ V2_MAIN_CHANNELS=[
     ("v2_results","📺｜プレイ結果","PAL CASINO｜各ゲームのプレイ結果をここに一括表示"),
     ("v2_status","🟢｜営業状況","PAL CASINO｜カジノが営業中かどうかの状況パネル（ゲームごとの営業状況）"),
     ("v2_announce","📢｜アナウンス","PAL CASINO｜宝くじ・ロト6抽選、イベント開始・終了、高額当選アナウンス"),
-    ("v2_log","📜｜ログ","PAL CASINO｜BET・払戻・収支ログ、管理操作・ゲーム設定変更・確率変更ログ"),
+    ("v2_log","📜｜ログ","PAL CASINO｜管理操作・ゲーム設定変更・確率変更・VIP購入ログ（ゲーム結果は📺｜プレイ結果へ）"),
     ("v2_admin","🛠｜運営","PAL CASINO｜管理者専用コンソール"),
 ]
 
@@ -246,30 +246,31 @@ def _split_display_name(display_name):
 
 async def _build_game_rooms():
     """GAMEカテゴリのチャンネル一覧を casino.games（ゲーム登録一覧）から動的に組み立てる。
-    新しいゲームを casino.games に implemented=TRUE で登録するだけで、
-    このファイルを書き換えなくても専用チャンネルが自動生成されるようになる。
-    戻り値: [(map_key, チャンネル名, ゲームキー), ...]
+    新しいゲームを casino.games に登録するだけで、このファイルを書き換えなくても専用チャンネルが自動生成される。
+    未実装（implemented=FALSE）のゲームも「🚧準備中」チャンネルとして作成する。
+    戻り値: [(map_key, チャンネル名, ゲームキー, 実装済みか), ...]
     ※ GACHA（1日1回ガチャ）は casino.games に存在しない特別枠のため固定で追加する。"""
     rooms=[]
     for r in await games():
-        if not r["implemented"]:
-            continue
         key=r["game_key"]
         emoji,name=_split_display_name(r["display_name"])
-        rooms.append((v2_room_map_key(key),f"{emoji}｜{name}",key))
-    rooms.append((v2_room_map_key("GACHA"),"🎁｜ガチャ","GACHA"))
+        rooms.append((v2_room_map_key(key),f"{emoji}｜{name}",key,bool(r["implemented"])))
+    rooms.append((v2_room_map_key("GACHA"),"🎁｜ガチャ","GACHA",True))
     return rooms
 
 
 async def build_v2_status_embed(guild):
-    """🟢｜営業状況 に表示する、カジノ全体・ゲームごとの営業中/休止中の一覧を作る。
+    """🟢｜営業状況 に表示する、カジノ全体・ゲームごとの営業中/休止中/準備中の一覧を作る。
     📢｜アナウンスとは別チャンネルで、営業状況だけを常時確認できるようにするためのもの。"""
     rows=await games()
     lines=[]
     for r in rows:
-        if not r["implemented"]:
-            continue
         cid=await map_get(v2_room_map_key(r["game_key"]))
+        if not r["implemented"]:
+            line=f"🚧 準備中｜**{r['display_name']}**"
+            if cid:line+=f"\n↳ <#{int(cid)}>"
+            lines.append(line)
+            continue
         is_open=bool(r["enabled"])
         line=f"{'🟢 営業中' if is_open else '🔴 休止中'}｜**{r['display_name']}**"
         if is_open and cid:line+=f"\n↳ <#{int(cid)}>"
@@ -497,8 +498,8 @@ async def ensure_v2_structure(guild):
         channels[map_key]=await _ensure_v2_channel(guild,main_cat,name,topic,map_key,overwrites,counts)
 
     game_rooms=await _build_game_rooms()
-    for map_key,name,_game_key in game_rooms:
-        topic=f"PAL CASINO｜{name} 専用チャンネル（結果は📺｜プレイ結果に公開されます）"
+    for map_key,name,_game_key,implemented in game_rooms:
+        topic=f"PAL CASINO｜{name} 専用チャンネル（結果は📺｜プレイ結果に公開されます）" if implemented else f"PAL CASINO｜{name} は準備中です"
         channels[map_key]=await _ensure_v2_channel(guild,game_cat,name,topic,map_key,overwrites,counts)
     counts["game_channels"]=len(game_rooms)
 
@@ -518,7 +519,7 @@ async def get_v2_channels(guild):
         cid=await map_get(map_key)
         ch=guild.get_channel(int(cid)) if cid else None
         if ch:channels[map_key]=ch
-    for map_key,_name,_game_key in await _build_game_rooms():
+    for map_key,_name,_game_key,_impl in await _build_game_rooms():
         cid=await map_get(map_key)
         ch=guild.get_channel(int(cid)) if cid else None
         if ch:channels[map_key]=ch
@@ -569,10 +570,16 @@ async def install_v2_panels(guild,channels):
             CasinoAdminView(),"v2_msg_admin",
         )
 
-    for map_key,_name,game_key in await _build_game_rooms():
+    for map_key,name,game_key,implemented in await _build_game_rooms():
         ch=channels.get(map_key)
         if not ch:continue
-        if game_key=="GACHA":
+        if not implemented:
+            await _ensure_panel_message(
+                ch,
+                emb(f"🚧 {name} 準備中",f"**{GAME_NAMES.get(game_key,name)}** は近日公開予定です。楽しみにお待ちください。",GOLD),
+                None,f"v2_msg_{map_key}",
+            )
+        elif game_key=="GACHA":
             await _ensure_panel_message(
                 ch,
                 emb("🎁 1日1回ガチャ","参加費 **500 CHIP**\n\n550：81%\n1,000：10%\n1,500：5%\n3,000：3%\n-10,000：0.999%\n100,000：0.001%",GOLD),
@@ -611,7 +618,7 @@ async def delete_v2_structure(guild):
     deleted=[]
     channel_keys=(
         [k for k,_n,_t in V2_MAIN_CHANNELS]
-        + [k for k,_n,_g in await _build_game_rooms()]
+        + [k for k,_n,_g,_i in await _build_game_rooms()]
         + [k for k,_n,_t in V2_VIP_CHANNELS]
         + [k for k,_n,_t in V2_VIP_GAME_CHANNELS]
     )
