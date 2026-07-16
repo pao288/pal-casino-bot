@@ -1,5 +1,5 @@
 import discord, asyncio
-from casino_db import games,game,profile,history,ranking_chip,ranking_maxwin,total_stats,setting,set_setting,chip_balance,pool,config_get,config_set,audit_global,game_stats,v2_room_map_key
+from casino_db import games,game,profile,history,ranking_chip,ranking_maxwin,total_stats,setting,set_setting,chip_balance,pool,config_get,config_set,audit_global,game_stats,map_get
 from casino_services import play_slot,play_coin,play_roulette,play_scratch,start_scratch,finish_scratch,play_chinchiro,start_chohan,finish_chohan,start_highlow,highlow_step,finish_highlow,create_crash,finish_crash,start_mines,mines_open,finish_mines,start_blackjack,blackjack_hit,finish_blackjack
 from lottery_service import buy_lottery,buy_loto,quick_pick,draw_lottery,draw_loto,lottery_user_overview,loto_user_overview,ensure_lottery_draw,ensure_loto_draw,latest_lottery_result,latest_loto_result,JST
 
@@ -30,14 +30,35 @@ async def _channel_by_map_keys(guild, *map_keys):
                 return ch
     return None
 
-async def _live_channel(guild, key):
-    return await _channel_by_map_keys(guild, v2_room_map_key(key), "casino_live")
+async def _live_channel(guild, key=None):
+    # ゲームをプレイするチャンネル（GAME内の各専用チャンネル）ではなく、
+    # 結果専用の「📺｜プレイ結果」チャンネルへまとめて送る。未設置なら旧casino-liveへフォールバック。
+    return await _channel_by_map_keys(guild, "v2_results", "casino_live")
 
 async def _announce_channel(guild):
     return await _channel_by_map_keys(guild, "v2_announce", "big_win")
 
 async def _log_channel(guild):
     return await _channel_by_map_keys(guild, "v2_log", "log")
+
+async def _post_round_log(guild, user, key, r):
+    """📜｜ログへ、1プレイごとのBET／払戻／収支を送る。"""
+    try:
+        ch = await _log_channel(guild)
+        if not ch:
+            return
+        profit = r.get("profit", r.get("payout", 0) - r.get("bet", 0))
+        e = emb(
+            "🎰 CASINO ROUND LOG",
+            f"{user.mention}\n**{GAME_NAMES.get(key, key)}**\n"
+            f"BET **{r.get('bet', 0):,} CHIP** → PAYOUT **{r.get('payout', 0):,} CHIP**\n"
+            f"収支 **{profit:+,} CHIP**",
+            GOLD,
+        )
+        e.set_footer(text=f"Round ID: {r.get('round_id', '-')}")
+        await ch.send(embed=e)
+    except Exception:
+        pass
 
 async def result_message(i,r,key):
     if r["status"]=="PREPARING": await i.edit_original_response(content="🚧 このゲームは現在準備中です。");return
@@ -58,7 +79,7 @@ async def result_message(i,r,key):
     await i.edit_original_response(content=None,embed=e)
 
     # 本人は操作チャンネル上のephemeral結果を見る。
-    # 同じ結果を、!casinosetupで作成したゲーム専用チャンネル（未設置ならcasino-live）へ公開する。
+    # 同じ結果を「📺｜プレイ結果」（未設置ならcasino-live）へ公開し、📜｜ログにも簡易ログを残す。
     live=await _live_channel(i.guild,key)
     if live:
         public_e=emb(f"{GAME_NAMES[key]}｜LIVE RESULT",color=GOLD)
@@ -69,6 +90,7 @@ async def result_message(i,r,key):
         public_e.add_field(name="倍率",value=f"×{r['multiplier']}")
         public_e.set_footer(text=f"Round ID: {r['round_id']}")
         await live.send(embed=public_e)
+    await _post_round_log(i.guild,i.user,key,r)
 
     threshold=int(await setting("big_win_multiplier","30"))
     if r["multiplier"]>=threshold and await setting("big_win_enabled","1")=="1":
@@ -98,6 +120,21 @@ class LotoBuyModal(discord.ui.Modal,title="🔢 ロト6"):
 def jst_time(dt):
     if not dt:return "未設定"
     return dt.astimezone(JST).strftime("%Y/%m/%d %H:%M")
+
+def build_lottery_announce_embed(r):
+    """宝くじ抽選結果アナウンス。個人名は出さず当選番号のみ。当選者が1人もいない時だけ「なし」と明記する。"""
+    text=f"**第{r['draw_no']}回**\n\n🎯 当選番号\n## {r['group']:02d}組 {r['number']:06d}番"
+    if not r["winners"]:
+        text+="\n\n🏆 当選者：なし"
+    return emb("🎊 PAL CASINO｜宝くじ抽選結果",text,GOLD)
+
+def build_loto_announce_embed(r):
+    """ロト6抽選結果アナウンス。個人名は出さず本数字・BONUS・繰越のみ。当選者が1人もいない時だけ「なし」と明記する。"""
+    nums=" / ".join(map(str,r["winning"]))
+    text=f"**第{r['draw_no']}回**\n\n🎯 本数字\n## {nums}\n\nBONUS **{r['bonus']}**\n\n次回繰越 **{r['carryover']:,} CHIP**"
+    if not r["winners"]:
+        text+="\n\n🏆 当選者：なし"
+    return emb("🔢 PAL CASINO｜ロト6抽選結果",text,GOLD)
 
 class LotteryMyTicketsView(discord.ui.View):
     def __init__(self):super().__init__(timeout=120)
@@ -192,6 +229,7 @@ async def public_result(i,r,key,title=None):
         pe.add_field(name="BET",value=f"{r['bet']:,} CHIP");pe.add_field(name="PAYOUT",value=f"{r['payout']:,} CHIP")
         pe.add_field(name="収支",value=f"{r['profit']:+,} CHIP");pe.add_field(name="倍率",value=f"×{r['multiplier']}")
         pe.set_footer(text=f"Round ID: {r['round_id']}");await live.send(embed=pe)
+    await _post_round_log(i.guild,i.user,key,r)
     special=str(r.get("special") or "")
     announce=special in ("GOD","サイコロなし","BIG BANG","ブラックホール") or r["payout"]>=100_000_000 or (r["bet"] and r["payout"]>=r["bet"]*30)
     if announce:
@@ -572,7 +610,20 @@ def highlow_joker_hint(s):
     if mult>=2:return "\n\n👁️ **一瞬だけ、見慣れない影が見えた気がした。**"
     return ""
 def highlow_embed(s):
-    return emb("📈 HIGH & LOW",f"現在カード **{s['current']}**\n現在倍率 **×{s['multiplier']}**\n\nHIGH / LOW を選択{highlow_joker_hint(s)}",GOLD)
+    # 倍率が1より大きい＝ダブルアップ中。ジョーカーモードの見た目に切り替える。
+    joker_mode=s.get("multiplier",1)>1
+    title="🃏 HIGH & LOW｜ジョーカーモード" if joker_mode else "📈 HIGH & LOW"
+    color=0x9B59B6 if joker_mode else GOLD
+    desc=("🃏 山札にジョーカーが紛れ込んでいます……\n\n" if joker_mode else "")+f"現在カード **{s['current']}**\n現在倍率 **×{s['multiplier']}**\n\nHIGH / LOW を選択{highlow_joker_hint(s)}"
+    return emb(title,desc,color)
+def highlow_win_embed(s):
+    # 勝利直後、次に進む前に「ダブルアップ」か「降りる」かを明示的に選ばせるための画面。
+    joker_mode=s.get("multiplier",1)>1
+    payout=int(s["bet"]*s["multiplier"])
+    desc=f"現在倍率 **×{s['multiplier']}**\n払戻予定 **{payout:,} CHIP**\n\n"
+    if joker_mode:desc+="🃏 次のカードからは山札にジョーカーが紛れ込みます……\n\n"
+    desc+="🎲 **ダブルアップ**：もう一度勝負して倍率アップを狙う\n💰 **降りる**：ここで払い戻しを受け取る"
+    return emb("🎉 WIN！ダブルアップしますか？",desc,0x9B59B6 if joker_mode else GOLD)
 class HighlowView(discord.ui.View):
     def __init__(self,uid,state):super().__init__(timeout=300);self.uid=uid;self.state=state
     async def choose(self,i,choice):
@@ -583,13 +634,28 @@ class HighlowView(discord.ui.View):
         if x.get("done") and not x.get("win"):
             await i.response.defer();r=await finish_highlow(i.user.id,self.state,0,"LOSE",{"joker":x.get("joker"),"next":x["next"]});await public_result(i,r,"HIGHLOW");return
         self.state["current"]=x["current"]
-        if not x.get("push"):self.state["multiplier"]=min(10,self.state["multiplier"]*2)
-        await i.response.edit_message(embed=highlow_embed(self.state),view=self)
+        if x.get("push"):
+            # 引き分け（同じカード）は倍率据え置きでもう一度選択させる
+            await i.response.edit_message(embed=highlow_embed(self.state),view=self);return
+        # 勝利：倍率アップの上で、ダブルアップ/降りるを明示的に選ばせる
+        self.state["multiplier"]=min(10,self.state["multiplier"]*2)
+        await i.response.edit_message(embed=highlow_win_embed(self.state),view=HighlowDoubleUpPromptView(self.uid,self.state))
     @discord.ui.button(label="HIGH",style=discord.ButtonStyle.danger)
     async def high(self,i,b):await self.choose(i,"HIGH")
     @discord.ui.button(label="LOW",style=discord.ButtonStyle.primary)
     async def low(self,i,b):await self.choose(i,"LOW")
     @discord.ui.button(label="💰 換金",style=discord.ButtonStyle.success)
+    async def cash(self,i,b):
+        if i.user.id!=self.uid:await i.response.send_message("プレイヤー専用です。",ephemeral=True);return
+        await i.response.defer();p=int(self.state["bet"]*self.state["multiplier"]);r=await finish_highlow(i.user.id,self.state,p,"CASHOUT",{"current":self.state["current"]});await public_result(i,r,"HIGHLOW")
+class HighlowDoubleUpPromptView(discord.ui.View):
+    """1回勝つたびに表示される、ダブルアップか降りるかの明示的な選択画面。"""
+    def __init__(self,uid,state):super().__init__(timeout=300);self.uid=uid;self.state=state
+    @discord.ui.button(label="🎲 ダブルアップ",style=discord.ButtonStyle.danger)
+    async def double_up(self,i,b):
+        if i.user.id!=self.uid:await i.response.send_message("プレイヤー専用です。",ephemeral=True);return
+        await i.response.edit_message(embed=highlow_embed(self.state),view=HighlowView(self.uid,self.state))
+    @discord.ui.button(label="💰 降りる",style=discord.ButtonStyle.success)
     async def cash(self,i,b):
         if i.user.id!=self.uid:await i.response.send_message("プレイヤー専用です。",ephemeral=True);return
         await i.response.defer();p=int(self.state["bet"]*self.state["multiplier"]);r=await finish_highlow(i.user.id,self.state,p,"CASHOUT",{"current":self.state["current"]});await public_result(i,r,"HIGHLOW")
@@ -679,31 +745,18 @@ class DailyPanel(discord.ui.View):
             await i.edit_original_response(content=f"ガチャエラー: `{type(ex).__name__}`\n`{str(ex)[:800]}`")
 
 
-# ===== !casinosetup で 🎰｜カジノ に設置する「チップ受取パネル」「カジノショップパネル」 =====
-class ChipClaimView(discord.ui.View):
-    def __init__(self):
-        super().__init__(timeout=None)
-
-    @discord.ui.button(label="🎁 CHIPを受け取る",style=discord.ButtonStyle.success,custom_id="casino_chip_claim")
-    async def claim(self,i,b):
-        await i.response.defer(ephemeral=True,thinking=True)
-        try:
-            from bank_gateway_for_other_bots import bank_credit
-            uid=str(i.user.id)
-            already=await pool().fetchval(
-                "SELECT 1 FROM casino.chip_claims WHERE user_id=$1 AND claim_date=(now() AT TIME ZONE 'Asia/Tokyo')::date",uid)
-            if already:
-                await i.edit_original_response(content="🎁 本日分は受け取り済みです。次は日本時間 0:00 に更新されます。");return
-            amount=int(await setting("chip_claim_amount","300"))
-            day=await pool().fetchval("SELECT (now() AT TIME ZONE 'Asia/Tokyo')::date::text")
-            r=await bank_credit("PAL_CASINO",f"CHIP_CLAIM:{uid}:{day}",uid,"CHIP",amount)
-            if r["status"]!="SUCCESS":
-                await i.edit_original_response(content=f"受け取り処理: `{r['status']}`");return
-            await pool().execute(
-                "INSERT INTO casino.chip_claims VALUES($1,(now() AT TIME ZONE 'Asia/Tokyo')::date,$2) ON CONFLICT DO NOTHING",uid,amount)
-            await i.edit_original_response(content=f"🎁 **{amount:,} CHIP** を受け取りました！\n現在残高 **{await chip_balance(uid):,} CHIP**")
-        except Exception as ex:
-            await i.edit_original_response(content=f"受け取りエラー: `{type(ex).__name__}`\n`{str(ex)[:500]}`")
+# ===== !casinosetup で 🎰｜カジノ に設置する「カジノショップパネル」 =====
+async def _grant_vip_role(guild,member):
+    """VIP購入者へ「👑 VIP」ロールを自動付与する。ロール未設置なら何もしない（後で!casinosetup実行時に自動同期される）。"""
+    try:
+        rid=await map_get("v2_vip_role")
+        if not rid:
+            return
+        role=guild.get_role(int(rid))
+        if role and role not in member.roles:
+            await member.add_roles(role,reason="PAL CASINO VIP purchase")
+    except Exception:
+        pass
 
 
 class CasinoShopView(discord.ui.View):
@@ -718,6 +771,7 @@ class CasinoShopView(discord.ui.View):
             uid=str(i.user.id)
             vip=await pool().fetchval("SELECT vip FROM casino.user_state WHERE user_id=$1",uid)
             if vip:
+                await _grant_vip_role(i.guild,i.user)
                 await i.edit_original_response(content="👑 既にVIP会員です。");return
             price=int(await setting("vip_price","50000"))
             r=await bank_debit("PAL_CASINO",f"VIP_PURCHASE:{uid}:{i.id}",uid,"CHIP",price)
@@ -728,7 +782,8 @@ class CasinoShopView(discord.ui.View):
             await pool().execute(
                 """INSERT INTO casino.user_state(user_id,vip) VALUES($1,TRUE)
                    ON CONFLICT(user_id) DO UPDATE SET vip=TRUE,updated_at=now()""",uid)
-            await i.edit_original_response(content=f"👑 VIP会員権を購入しました！（**-{price:,} CHIP**）\nVIP限定ゲームが解放されます。")
+            await _grant_vip_role(i.guild,i.user)
+            await i.edit_original_response(content=f"👑 VIP会員権を購入しました！（**-{price:,} CHIP**）\n👑VIPロールが付与され、VIPルーム／VIP GAMEが解放されます。\n通常ゲームの最大BETも2倍になります。")
             log_ch=await _log_channel(i.guild)
             if log_ch:await log_ch.send(embed=emb("👑 VIP購入",f"{i.user.mention} がVIP会員権を購入しました。｜**-{price:,} CHIP**",GOLD))
         except Exception as ex:
@@ -870,8 +925,9 @@ class AdminGameSelect(discord.ui.Select):
     async def callback(self,i):
         cfg=await game(self.values[0]);new=not cfg["enabled"]
         await pool().execute("UPDATE casino.games SET enabled=$1 WHERE game_key=$2",new,self.values[0])
-        from setup_service import refresh_status_panel
+        from setup_service import refresh_status_panel, refresh_v2_status_panel
         await refresh_status_panel(i.guild)
+        await refresh_v2_status_panel(i.guild)
         log_ch=await _log_channel(i.guild)
         if log_ch:await log_ch.send(embed=emb("🎮 ゲーム設定変更",f"管理者 {i.user.mention}\n**{cfg['display_name']}** → {'🟢 営業中' if new else '🔴 休止中'}",GOLD))
         await i.response.edit_message(content=f"{cfg['display_name']} → {'🟢 営業中' if new else '🔴 休止中'}\n\n📢 営業案内も更新しました。",view=None)
@@ -947,14 +1003,7 @@ class SystemView(discord.ui.View):
         try:
             r=await draw_lottery();await ensure_lottery_draw()
             ch=await _channel_by_map_keys(i.guild,"v2_announce","status")
-            winner_lines=[]
-            for uid,rank,prize,g,n in r["winners"]:
-                member=i.guild.get_member(int(uid))
-                who=member.mention if member else f"<@{uid}>"
-                winner_lines.append(f"🎉 {who} さんが **{rank}** に当選しました！｜**{prize:,} CHIP**")
-            winners_text="\n".join(winner_lines) if winner_lines else "今回は当選者なし"
-            text=f"**第{r['draw_no']}回**\n\n🎯 当選番号\n## {r['group']:02d}組 {r['number']:06d}番\n\n🏆 **当選発表**\n{winners_text}"
-            if ch:await ch.send(embed=emb("🎊 PAL CASINO｜宝くじ抽選結果",text,GOLD))
+            if ch:await ch.send(embed=build_lottery_announce_embed(r))
             await i.edit_original_response(content=f"🎊 第{r['draw_no']}回 宝くじ抽選完了\n\n**{r['group']:02d}組 {r['number']:06d}番**")
         except Exception as ex:await i.edit_original_response(content=f"宝くじ抽選エラー: `{type(ex).__name__}`\n`{str(ex)[:800]}`")
     @discord.ui.button(label="🔢 ロト6抽選",style=discord.ButtonStyle.danger)
@@ -963,14 +1012,7 @@ class SystemView(discord.ui.View):
         try:
             r=await draw_loto();await ensure_loto_draw();nums=" / ".join(map(str,r["winning"]))
             ch=await _channel_by_map_keys(i.guild,"v2_announce","status")
-            winner_lines=[]
-            for uid,rank,prize,numbers in r["winners"]:
-                member=i.guild.get_member(int(uid))
-                who=member.mention if member else f"<@{uid}>"
-                winner_lines.append(f"🎉 {who} さんが **{rank}等** に当選しました！｜**{prize:,} CHIP**")
-            winners_text="\n".join(winner_lines) if winner_lines else "今回は当選者なし"
-            text=f"**第{r['draw_no']}回**\n\n🎯 本数字\n## {nums}\n\nBONUS **{r['bonus']}**\n\n🏆 **当選発表**\n{winners_text}\n\n次回繰越 **{r['carryover']:,} CHIP**"
-            if ch:await ch.send(embed=emb("🔢 PAL CASINO｜ロト6抽選結果",text,GOLD))
+            if ch:await ch.send(embed=build_loto_announce_embed(r))
             await i.edit_original_response(content=f"🔢 第{r['draw_no']}回 ロト6抽選完了\n\n本数字 **{nums}**\nBONUS **{r['bonus']}**")
         except Exception as ex:await i.edit_original_response(content=f"ロト6抽選エラー: `{type(ex).__name__}`\n`{str(ex)[:800]}`")
 
@@ -1029,14 +1071,16 @@ class CasinoAdminView(discord.ui.View):
     @discord.ui.button(label="🟢 全ゲーム営業",style=discord.ButtonStyle.success,custom_id="casino_admin_all_games_on",row=3)
     async def all_games_on(self,i,b):
         await pool().execute("UPDATE casino.games SET enabled=TRUE WHERE implemented=TRUE")
-        from setup_service import refresh_status_panel
+        from setup_service import refresh_status_panel, refresh_v2_status_panel
         await refresh_status_panel(i.guild)
+        await refresh_v2_status_panel(i.guild)
         await i.response.send_message("🟢 **全ゲーム営業開始！**\n\n📢 営業案内も更新しました。",ephemeral=True)
     @discord.ui.button(label="🔴 全ゲーム休止",style=discord.ButtonStyle.danger,custom_id="casino_admin_all_games_off",row=3)
     async def all_games_off(self,i,b):
         await pool().execute("UPDATE casino.games SET enabled=FALSE")
-        from setup_service import refresh_status_panel
+        from setup_service import refresh_status_panel, refresh_v2_status_panel
         await refresh_status_panel(i.guild)
+        await refresh_v2_status_panel(i.guild)
         await i.response.send_message("🔴 **全ゲーム休止！**\n\n📢 営業案内も更新しました。",ephemeral=True)
     @discord.ui.button(label="⚙️ ゲーム設定",style=discord.ButtonStyle.secondary,custom_id="casino_admin_settings",row=0)
     async def gs(self,i,b):await i.response.send_message("⚙️ 詳細設定するゲームを選択してください。",view=SettingsView(await games()),ephemeral=True)
@@ -1059,12 +1103,13 @@ class CasinoAdminView(discord.ui.View):
     async def v2_recover(self,i,b):
         await i.response.defer(ephemeral=True,thinking=True)
         import setup_service as _ss  # 循環importを避けるため遅延import
-        _main_cat,_game_cat,channels,counts=await _ss.ensure_v2_structure(i.guild)
+        _main_cat,_game_cat,vip_role,channels,counts=await _ss.ensure_v2_structure(i.guild)
         await _ss.install_v2_panels(i.guild,channels)
         await i.followup.send(
             f"♻️ PAL CASINOシステムを復旧しました。\n"
             f"新規作成: {counts['created']}件\n復旧: {counts['restored']}件\n再利用: {counts['reused']}件\n"
-            f"ゲームチャンネル数: {counts['game_channels']}\n\n"
+            f"ゲームチャンネル数: {counts['game_channels']}\n"
+            f"👑 VIPロール: {vip_role.mention}\n\n"
             f"（CHIP・ゲームデータ・ランキング・宝くじ・ロト6・確率・各ゲーム設定・全ユーザーデータはそのまま利用しています）",
             ephemeral=True,
         )
