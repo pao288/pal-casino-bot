@@ -3,7 +3,7 @@ from casino_db import map_get, map_set, map_clear, pool, games, v2_room_map_key,
 from views import (
     CasinoAdminView, CasinoLobbyView, DirectGamePanel, DailyPanel,
     LotteryLaunchView, LotoLaunchView, DIRECT_GAME_INFO,
-    ranking_embed, emb, GOLD, ChipClaimView, CasinoShopView, GAME_NAMES,
+    ranking_embed, emb, GOLD, CasinoShopView, GAME_NAMES,
 )
 
 PUBLIC_CAT="🎰 PAL CASINO"
@@ -227,9 +227,11 @@ V2_GAME_CAT_KEY="v2_cat_game"
 
 # (map_key, チャンネル名, トピック)
 V2_MAIN_CHANNELS=[
-    ("v2_casino","🎰｜カジノ","PAL CASINO｜カジノパネル・チップ受取・ショップ"),
+    ("v2_casino","🎰｜カジノ","PAL CASINO｜カジノパネル・ショップ"),
+    ("v2_results","📺｜プレイ結果","PAL CASINO｜各ゲームのプレイ結果をここに一括表示"),
+    ("v2_status","🟢｜営業状況","PAL CASINO｜カジノが営業中かどうかの状況パネル（ゲームごとの営業状況）"),
     ("v2_announce","📢｜アナウンス","PAL CASINO｜宝くじ・ロト6抽選、イベント開始・終了、高額当選アナウンス"),
-    ("v2_log","📜｜ログ","PAL CASINO｜管理操作・ゲーム設定変更・確率変更ログ"),
+    ("v2_log","📜｜ログ","PAL CASINO｜BET・払戻・収支ログ、管理操作・ゲーム設定変更・確率変更ログ"),
     ("v2_admin","🛠｜運営","PAL CASINO｜管理者専用コンソール"),
 ]
 
@@ -259,6 +261,40 @@ async def _build_game_rooms():
     return rooms
 
 
+async def build_v2_status_embed(guild):
+    """🟢｜営業状況 に表示する、カジノ全体・ゲームごとの営業中/休止中の一覧を作る。
+    📢｜アナウンスとは別チャンネルで、営業状況だけを常時確認できるようにするためのもの。"""
+    rows=await games()
+    lines=[]
+    for r in rows:
+        if not r["implemented"]:
+            continue
+        cid=await map_get(v2_room_map_key(r["game_key"]))
+        is_open=bool(r["enabled"])
+        line=f"{'🟢 営業中' if is_open else '🔴 休止中'}｜**{r['display_name']}**"
+        if is_open and cid:line+=f"\n↳ <#{int(cid)}>"
+        lines.append(line)
+    gacha_cid=await map_get(v2_room_map_key("GACHA"))
+    if gacha_cid:
+        lines.append(f"🟢 営業中｜**🎁 1日1回ガチャ**\n↳ <#{int(gacha_cid)}>")
+    active=sum(1 for r in rows if r["enabled"] and r["implemented"])
+    return emb(
+        "🟢 PAL CASINO｜営業中" if active else "🔴 PAL CASINO｜営業休止",
+        "現在のカジノ営業状況です。\n営業中のゲームはチャンネル名を押すと直接移動できます。\n\n"+"\n\n".join(lines),
+        0x2ECC71 if active else 0xE74C3C,
+    )
+
+
+async def refresh_v2_status_panel(guild):
+    """🟢｜営業状況 の営業案内パネルを最新の状態に更新する（無ければ何もしない）。"""
+    cid=await map_get("v2_status")
+    ch=guild.get_channel(int(cid)) if cid else None
+    if not ch:
+        return
+    embed=await build_v2_status_embed(guild)
+    await _ensure_panel_message(ch,embed,None,"v2_msg_status")
+
+
 def _v2_overwrites(guild):
     # 一般ユーザー: 閲覧〇・送信×・添付×・リアクション×・スレッド× / BOT・管理者(Administrator権限)は全許可
     return {
@@ -274,6 +310,128 @@ def _v2_overwrites(guild):
             create_private_threads=True, send_messages_in_threads=True,
         ),
     }
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# VIP購入者専用エリア: 👑VIP（VIPルーム）／🎮VIP GAME（準備中）
+# @everyoneは非表示、👑VIPロール保持者のみ閲覧可。BOT・管理者(Administrator権限)は常時操作可能。
+# ═══════════════════════════════════════════════════════════════════════
+VIP_ROLE_NAME="👑 VIP"
+VIP_ROLE_KEY="v2_vip_role"
+V2_VIP_CAT_NAME="👑 VIP"
+V2_VIP_CAT_KEY="v2_cat_vip"
+V2_VIP_GAME_CAT_NAME="🎮 VIP GAME"
+V2_VIP_GAME_CAT_KEY="v2_cat_vipgame"
+
+# (map_key, チャンネル名, トピック)
+V2_VIP_CHANNELS=[
+    ("v2_vip_room","💬｜VIPルーム","PAL CASINO｜VIP会員専用ラウンジ"),
+]
+V2_VIP_GAME_CHANNELS=[
+    ("v2_vip_placeholder","🚧｜準備中","PAL CASINO｜VIP専用ゲームは現在準備中です"),
+]
+
+
+def _vip_lounge_overwrites(guild,vip_role):
+    # VIPルーム: VIPロール保持者は自由に会話できるラウンジ
+    return {
+        guild.default_role: discord.PermissionOverwrite(view_channel=False),
+        vip_role: discord.PermissionOverwrite(
+            view_channel=True, send_messages=True, add_reactions=True,
+            attach_files=True, create_public_threads=True,
+            create_private_threads=True, send_messages_in_threads=True,
+        ),
+        guild.me: discord.PermissionOverwrite(
+            view_channel=True, send_messages=True, add_reactions=True,
+            attach_files=True, embed_links=True, manage_messages=True,
+            manage_channels=True, create_public_threads=True,
+            create_private_threads=True, send_messages_in_threads=True,
+        ),
+    }
+
+
+def _vip_game_overwrites(guild,vip_role):
+    # VIP GAME: 他のGAMEチャンネル同様、閲覧のみ（パネルはBOTが操作）。現状は準備中の案内のみ表示。
+    return {
+        guild.default_role: discord.PermissionOverwrite(view_channel=False),
+        vip_role: discord.PermissionOverwrite(
+            view_channel=True, send_messages=False, add_reactions=False,
+            attach_files=False, create_public_threads=False,
+            create_private_threads=False, send_messages_in_threads=False,
+        ),
+        guild.me: discord.PermissionOverwrite(
+            view_channel=True, send_messages=True, add_reactions=True,
+            attach_files=True, embed_links=True, manage_messages=True,
+            manage_channels=True, create_public_threads=True,
+            create_private_threads=True, send_messages_in_threads=True,
+        ),
+    }
+
+
+async def ensure_vip_role(guild):
+    """「👑 VIP」ロールを用意し、casino.user_state.vip=TRUEの全員に自動付与（再同期）する。
+    ロールが手動で消された場合も、次回呼び出し時に自動で作り直す。"""
+    rid=await map_get(VIP_ROLE_KEY)
+    role=guild.get_role(int(rid)) if rid else None
+    if role is None:
+        role=discord.utils.get(guild.roles,name=VIP_ROLE_NAME)
+    if role is None:
+        role=await guild.create_role(
+            name=VIP_ROLE_NAME,color=discord.Color.gold(),mentionable=False,
+            reason="PAL CASINO VIP role",
+        )
+    await map_set(VIP_ROLE_KEY,role.id)
+
+    # DB側でVIP扱いの全ユーザーへロールを再同期する（役職だけ消えていても復元される）。
+    try:
+        vip_ids=await pool().fetch("SELECT user_id FROM casino.user_state WHERE vip=TRUE")
+        for row in vip_ids:
+            member=guild.get_member(int(row["user_id"]))
+            if member and role not in member.roles:
+                try:
+                    await member.add_roles(role,reason="PAL CASINO VIP role sync")
+                except discord.HTTPException:
+                    pass
+    except Exception:
+        pass
+    return role
+
+
+async def ensure_vip_structure(guild):
+    """👑VIP（VIPルーム）／🎮VIP GAME（準備中）を用意する。既存は再利用し、不足分のみ復旧する。"""
+    counts={"created":0,"restored":0,"reused":0}
+    vip_role=await ensure_vip_role(guild)
+    lounge_ow=_vip_lounge_overwrites(guild,vip_role)
+    game_ow=_vip_game_overwrites(guild,vip_role)
+
+    vip_cat=await _ensure_v2_category(guild,V2_VIP_CAT_NAME,V2_VIP_CAT_KEY,lounge_ow,counts)
+    vip_game_cat=await _ensure_v2_category(guild,V2_VIP_GAME_CAT_NAME,V2_VIP_GAME_CAT_KEY,game_ow,counts)
+
+    channels={}
+    for map_key,name,topic in V2_VIP_CHANNELS:
+        channels[map_key]=await _ensure_v2_channel(guild,vip_cat,name,topic,map_key,lounge_ow,counts)
+    for map_key,name,topic in V2_VIP_GAME_CHANNELS:
+        channels[map_key]=await _ensure_v2_channel(guild,vip_game_cat,name,topic,map_key,game_ow,counts)
+
+    return vip_role,vip_cat,vip_game_cat,channels,counts
+
+
+async def install_vip_panels(channels):
+    """VIPルームの案内メッセージと、VIP GAMEの「準備中」案内を設置する。"""
+    room=channels.get("v2_vip_room")
+    if room:
+        await _ensure_panel_message(
+            room,
+            emb("👑 VIPルームへようこそ","VIP会員限定のラウンジです。自由にご歓談ください。",GOLD),
+            None,"v2_msg_viproom",
+        )
+    placeholder=channels.get("v2_vip_placeholder")
+    if placeholder:
+        await _ensure_panel_message(
+            placeholder,
+            emb("🚧 VIP限定ゲーム 準備中","近日公開予定です。楽しみにお待ちください。",GOLD),
+            None,"v2_msg_vipgame",
+        )
 
 
 async def _ensure_v2_category(guild,name,map_key,overwrites,counts):
@@ -340,11 +498,17 @@ async def ensure_v2_structure(guild):
 
     game_rooms=await _build_game_rooms()
     for map_key,name,_game_key in game_rooms:
-        topic=f"PAL CASINO｜{name} 専用チャンネル（結果もここに公開されます）"
+        topic=f"PAL CASINO｜{name} 専用チャンネル（結果は📺｜プレイ結果に公開されます）"
         channels[map_key]=await _ensure_v2_channel(guild,game_cat,name,topic,map_key,overwrites,counts)
     counts["game_channels"]=len(game_rooms)
 
-    return main_cat,game_cat,channels,counts
+    # VIP専用エリア（👑VIP／🎮VIP GAME）も合わせて用意する（不足していれば新規作成、既存は再利用）。
+    vip_role,_vip_cat,_vip_game_cat,vip_channels,vip_counts=await ensure_vip_structure(guild)
+    channels.update(vip_channels)
+    for k in ("created","restored","reused"):
+        counts[k]+=vip_counts[k]
+
+    return main_cat,game_cat,vip_role,channels,counts
 
 
 async def get_v2_channels(guild):
@@ -355,6 +519,10 @@ async def get_v2_channels(guild):
         ch=guild.get_channel(int(cid)) if cid else None
         if ch:channels[map_key]=ch
     for map_key,_name,_game_key in await _build_game_rooms():
+        cid=await map_get(map_key)
+        ch=guild.get_channel(int(cid)) if cid else None
+        if ch:channels[map_key]=ch
+    for map_key,_name,_topic in V2_VIP_CHANNELS+V2_VIP_GAME_CHANNELS:
         cid=await map_get(map_key)
         ch=guild.get_channel(int(cid)) if cid else None
         if ch:channels[map_key]=ch
@@ -376,25 +544,22 @@ async def _ensure_panel_message(channel,embed,view,map_key):
 
 
 async def install_v2_panels(guild,channels):
-    """🎰｜カジノにカジノパネル／チップ受取パネル／カジノショップパネル、🛠｜運営に管理パネル、
+    """🎰｜カジノにカジノパネル／カジノショップパネル、🟢｜営業状況に営業案内パネル、🛠｜運営に管理パネル、
     GAMEカテゴリの各チャンネルに対応するゲームパネルを設置する。既に存在する場合は再利用（編集）する。"""
     casino_ch=channels.get("v2_casino")
     if casino_ch:
         await _ensure_panel_message(
             casino_ch,
-            emb("🎰 PAL CASINO｜カジノパネル","残高・履歴・プロフィール確認はここから。\nゲームは 🎮 GAME カテゴリの各専用チャンネルで直接プレイできます。",GOLD),
+            emb("🎰 PAL CASINO｜カジノパネル","残高・履歴・プロフィール確認はここから。\nゲームは 🎮 GAME カテゴリの各専用チャンネルで直接プレイでき、結果は 📺｜プレイ結果 に公開されます。",GOLD),
             CasinoLobbyView(),"v2_msg_casino",
-        )
-        await _ensure_panel_message(
-            casino_ch,
-            emb("🎁 チップ受取パネル",f"1日1回、無料で **{await setting('chip_claim_amount','300')} CHIP** を受け取れます。",GOLD),
-            ChipClaimView(),"v2_msg_chipclaim",
         )
         await _ensure_panel_message(
             casino_ch,
             emb("🛍️ カジノショップ",f"👑 **VIP会員権** — **{int(await setting('vip_price','50000')):,} CHIP**\n購入するとVIP限定ゲームが解放されます。",GOLD),
             CasinoShopView(),"v2_msg_shop",
         )
+
+    await refresh_v2_status_panel(guild)
 
     admin_ch=channels.get("v2_admin")
     if admin_ch:
@@ -429,22 +594,27 @@ async def install_v2_panels(guild,channels):
             title,desc=DIRECT_GAME_INFO.get(game_key,(GAME_NAMES.get(game_key,game_key),""))
             await _ensure_panel_message(
                 ch,
-                emb(title,desc+"\n\n**遊び方**\n下の「🎮 プレイ」から開始。BETや選択は本人だけに表示されます。\n結果はこのチャンネルに公開されます。",GOLD),
+                emb(title,desc+"\n\n**遊び方**\n下の「🎮 プレイ」から開始。BETや選択は本人だけに表示されます。\n結果は 📺｜プレイ結果 に公開されます。",GOLD),
                 DirectGamePanel(game_key),f"v2_msg_{map_key}",
             )
 
+    await install_vip_panels(channels)
+
 
 async def delete_v2_structure(guild):
-    """Discord側（🎰 PAL CASINO／🎮 GAMEのカテゴリ・チャンネル・パネル）のみを削除する。
+    """Discord側（🎰 PAL CASINO／🎮 GAME／👑 VIP／🎮 VIP GAMEのカテゴリ・チャンネル・パネル）のみを削除する。
     チャンネルIDの記録（channel_map）はあえて消さずに残す。次回!casinosetup実行時に
     「そのIDのチャンネルが存在しない＝復旧対象」として検知させ、不足分だけ自動復元するため。
-    CHIP・ゲームデータ・ランキング・宝くじ・ロト6・確率・各ゲーム設定・全ユーザーデータは削除しない。
-
-    削除漏れ防止のため、追跡している map_key のチャンネルを消すだけでなく、
-    最終的に 🎰 PAL CASINO ／ 🎮 GAME 両カテゴリの中に残っている全チャンネルも
-    ざらいで削除してから、カテゴリ自体を削除する。"""
+    CHIP・ゲームデータ・ランキング・宝くじ・ロト6・確率・各ゲーム設定・全ユーザーデータ・VIP資格(DB)は削除しない。
+    ※「👑 VIP」ロール自体もあえて削除しない（削除するとVIP会員の見た目上の印が消えてしまうため）。
+      次回 !casinosetup 実行時に、DB上VIPの全員へロールが自動で再同期される。"""
     deleted=[]
-    channel_keys=[k for k,_n,_t in V2_MAIN_CHANNELS]+[k for k,_n,_g in await _build_game_rooms()]
+    channel_keys=(
+        [k for k,_n,_t in V2_MAIN_CHANNELS]
+        + [k for k,_n,_g in await _build_game_rooms()]
+        + [k for k,_n,_t in V2_VIP_CHANNELS]
+        + [k for k,_n,_t in V2_VIP_GAME_CHANNELS]
+    )
     for map_key in channel_keys:
         cid=await map_get(map_key)
         if cid:
@@ -456,7 +626,13 @@ async def delete_v2_structure(guild):
                 except discord.HTTPException:
                     pass
 
-    for cat_key,cat_name in ((V2_MAIN_CAT_KEY,V2_MAIN_CAT_NAME),(V2_GAME_CAT_KEY,V2_GAME_CAT_NAME)):
+    category_defs=(
+        (V2_MAIN_CAT_KEY,V2_MAIN_CAT_NAME),
+        (V2_GAME_CAT_KEY,V2_GAME_CAT_NAME),
+        (V2_VIP_CAT_KEY,V2_VIP_CAT_NAME),
+        (V2_VIP_GAME_CAT_KEY,V2_VIP_GAME_CAT_NAME),
+    )
+    for cat_key,cat_name in category_defs:
         cid=await map_get(cat_key)
         cat=guild.get_channel(int(cid)) if cid else discord.utils.get(guild.categories,name=cat_name)
         if cat:

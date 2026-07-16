@@ -127,3 +127,15 @@ async def latest_lottery_result():
 
 async def latest_loto_result():
     return await pool().fetchrow("SELECT * FROM casino.loto_draws WHERE status='DRAWN' ORDER BY draw_no DESC LIMIT 1")
+
+
+# ===== 自動抽選（!casinosetup の自動抽選ループ用） =====
+# draw_at（購入受付開始から1週間後＝ensure_lottery_draw/ensure_loto_drawが既に設定している時刻）を
+# 過ぎた「OPENのまま」の回があるかどうかだけを判定する。抽選確率・当選ロジックは一切変更しない。
+async def lottery_due():
+    return bool(await pool().fetchval(
+        "SELECT 1 FROM casino.lottery_draws WHERE status='OPEN' AND draw_at<=now() LIMIT 1"))
+
+async def loto_due():
+    return bool(await pool().fetchval(
+        "SELECT 1 FROM casino.loto_draws WHERE status='OPEN' AND draw_at<=now() LIMIT 1"))
